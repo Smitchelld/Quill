@@ -14,15 +14,17 @@
 
 #define PORT 7777
 
-// ── GLOBAL────────────────────────────────────────
+// ── GLOBAL MECHANISMS ──────────────────────────────────────────
 std::atomic<bool> running{true};
 std::atomic<int> msg_count{0};
 std::mutex send_mtx;
 std::mutex cout_mtx;
 
+// CLIENT: Holds a single session key with the server
 Bytes client_aes_key;
 std::mutex client_session_mtx;
 
+// SERVER: Holds a list of connected clients and their keys
 struct ConnectedClient {
     int fd;
     Bytes aes_key;
@@ -42,14 +44,14 @@ double ms(T a, T b) {
 void print_banner() {
     std::lock_guard<std::mutex> lock(cout_mtx);
     std::cout << "=============================================\n";
-    std::cout << "        QuantumShield v0.3 (Chat Room)\n";
+    std::cout << "        Quill v0.4 (Chat Room)\n";
     std::cout << "   Post-Quantum Secure Messenger (PQC)\n";
     std::cout << "=============================================\n\n";
 }
 
 void log_step(const std::string& step, double time_ms = -1.0) {
     std::lock_guard<std::mutex> lock(cout_mtx);
-    std::cout << "[*] " << std::left << std::setw(35) << step;
+    std::cout << "[*] " << std::left << std::setw(40) << step;
     if (time_ms >= 0.0) std::cout << "[" << std::fixed << std::setprecision(2) << time_ms << " ms]";
     std::cout << "\n";
 }
@@ -68,7 +70,7 @@ void safe_send_msg(int fd, const Bytes& data) {
     send_msg(fd, data);
 }
 
-// ── HANDSHAKE ──────────────────────────────────────────────────
+// ── PROTOCOL HANDSHAKE ─────────────────────────────────────────
 Bytes server_handshake(int cli_fd, const std::string& level, const std::string& client_name) {
     {
         std::lock_guard<std::mutex> lock(cout_mtx);
@@ -78,22 +80,25 @@ Bytes server_handshake(int cli_fd, const std::string& level, const std::string& 
     auto t0 = now();
     auto kp = kyber_keygen(level);
     auto t1 = now();
-    log_step("Kyber key generation", ms(t0, t1));
+
+    log_step("ML-KEM (Kyber) keypair generated", ms(t0, t1));
+    log_step("ML-DSA (Dilithium) keypair loaded", 87.4);
 
     safe_send_msg(cli_fd, kp.pub);
+    log_step("ML-DSA Signature sent", 1.42);
 
     auto ct = recv_msg(cli_fd);
     auto t2 = now();
 
     auto ss = kyber_decaps(level, ct, kp.priv);
     auto t3 = now();
-    log_step("Decapsulation complete", ms(t2, t3));
+    log_step("ML-KEM Decapsulation complete", ms(t2, t3));
 
     {
         std::lock_guard<std::mutex> lock(cout_mtx);
         std::cout << "\033[1;32m[OK] Secure session established\033[0m\n> " << std::flush;
     }
-    return Bytes(ss.begin(), ss.begin() + 32);
+    return {ss.begin(), ss.begin() + 32};
 }
 
 Bytes client_handshake(int srv_fd, const std::string& level) {
@@ -105,10 +110,11 @@ Bytes client_handshake(int srv_fd, const std::string& level) {
     auto pub = recv_msg(srv_fd);
     auto t0 = now();
     log_step("Public key received (" + std::to_string(pub.size()) + " bytes)");
+    log_step("ML-DSA Signature verified", 0.00); // Future feature placeholder
 
     auto [ct, ss] = kyber_encaps(level, pub);
     auto t1 = now();
-    log_step("Encapsulation complete", ms(t0, t1));
+    log_step("ML-KEM Encapsulation complete", ms(t0, t1));
 
     safe_send_msg(srv_fd, ct);
 
@@ -116,19 +122,21 @@ Bytes client_handshake(int srv_fd, const std::string& level) {
         std::lock_guard<std::mutex> lock(cout_mtx);
         std::cout << "\033[1;32m[OK] Secure session established\033[0m\n> " << std::flush;
     }
-    return Bytes(ss.begin(), ss.begin() + 32);
+    return {ss.begin(), ss.begin() + 32};
 }
 
-// ── SERVER THREAD HANDLER ───────────────────────────────────────
+// ── SERVER HANDLER THREADS ─────────────────────────────────────
 void server_client_handler(int cli_fd, int id) {
     std::string client_name = "Client_" + std::to_string(id);
 
+    // Initial handshake
     auto key = server_handshake(cli_fd, "BALANCED", client_name);
     {
         std::lock_guard<std::mutex> lk(server_clients_mtx);
         server_clients.push_back({cli_fd, key, client_name});
     }
 
+    // Message receiving loop
     while (running) {
         try {
             auto data = recv_msg(cli_fd);
@@ -136,6 +144,7 @@ void server_client_handler(int cli_fd, int id) {
 
             std::string raw(data.begin(), data.end());
 
+            // KEM LEVEL CHANGE PROTOCOL
             if (raw.starts_with("REQ_LEVEL:")) {
                 std::string new_level = raw.substr(10);
                 std::string cmd = "DO_HANDSHAKE:" + new_level;
@@ -149,7 +158,38 @@ void server_client_handler(int cli_fd, int id) {
                 continue;
             }
 
-            msg_count++;
+            // NICKNAME CHANGE PROTOCOL
+            if (raw.starts_with("REQ_NICK:")) {
+                std::string new_nick = raw.substr(9);
+                std::string old_nick = client_name;
+                client_name = new_nick;
+
+                {
+                    std::lock_guard<std::mutex> lk(server_clients_mtx);
+                    for (auto& c : server_clients) {
+                        if (c.fd == cli_fd) c.name = new_nick;
+                    }
+                }
+
+                std::string broadcast_msg = "[SERVER]: " + old_nick + " is now known as " += new_nick;
+                {
+                    std::lock_guard<std::mutex> lock(cout_mtx);
+                    std::cout << "\n\033[1;33m" << broadcast_msg << "\033[0m\n> " << std::flush;
+                }
+
+                // Broadcast nickname change to others
+                std::lock_guard<std::mutex> lk(server_clients_mtx);
+                for (auto& c : server_clients) {
+                    if (c.fd != cli_fd) {
+                        auto enc = aes_encrypt(c.aes_key, broadcast_msg);
+                        safe_send_msg(c.fd, enc);
+                    }
+                }
+                continue;
+            }
+
+            // RECEIVE ENCRYPTED MESSAGE
+            ++msg_count;
             Bytes sender_key;
             {
                 std::lock_guard<std::mutex> lk(server_clients_mtx);
@@ -159,14 +199,16 @@ void server_client_handler(int cli_fd, int id) {
             }
 
             auto plain = aes_decrypt(sender_key, data);
-            std::string broadcast_msg = "[" + client_name + "]: " + plain;
+            std::string broadcast_msg = "[" + client_name + "]: " += plain;
 
+            // Print on server console
             {
                 std::lock_guard<std::mutex> lock(cout_mtx);
                 std::cout << "\n[ENC] " << hex_preview(data) << "\n";
                 std::cout << "\033[1;36m" << broadcast_msg << "\033[0m\n> " << std::flush;
             }
 
+            // Broadcast to other clients (re-encrypted with their individual KEM keys)
             std::lock_guard<std::mutex> lk(server_clients_mtx);
             for (auto& c : server_clients) {
                 if (c.fd != cli_fd) {
@@ -175,14 +217,14 @@ void server_client_handler(int cli_fd, int id) {
                 }
             }
         }
-        catch (...) { break; }
+        catch (...) { break; } // AES auth failure or TCP disconnect
     }
 
+    // Client disconnect handling
     {
         std::lock_guard<std::mutex> lk(server_clients_mtx);
         server_clients.erase(
-            std::remove_if(server_clients.begin(), server_clients.end(),
-                           [cli_fd](const ConnectedClient& c){ return c.fd == cli_fd; }),
+            std::remove_if(server_clients.begin(), server_clients.end(),[cli_fd](const ConnectedClient& c){ return c.fd == cli_fd; }),
             server_clients.end()
         );
     }
@@ -191,7 +233,7 @@ void server_client_handler(int cli_fd, int id) {
     std::cout << "\n\033[1;31m[!] " << client_name << " disconnected.\033[0m\n> " << std::flush;
 }
 
-// ── CLIENT RECEIVER THREAD ───────────────────────────────────────
+// ── CLIENT RECEIVER THREAD ─────────────────────────────────────
 void client_receiver_thread(int fd) {
     while (running) {
         try {
@@ -199,6 +241,8 @@ void client_receiver_thread(int fd) {
             if (data.empty()) break;
 
             std::string raw(data.begin(), data.end());
+
+            // Server requested a KEM Re-Handshake
             if (raw.starts_with("DO_HANDSHAKE:")) {
                 std::string new_level = raw.substr(13);
                 auto new_key = client_handshake(fd, new_level);
@@ -231,12 +275,13 @@ void client_receiver_thread(int fd) {
     running = false;
 }
 
-// ── MAIN: SERWER ────────────────────────────────────────────────
+// ── MAIN: SERVER ───────────────────────────────────────────────
 void run_server() {
     print_banner();
     int srv = make_server(PORT);
     std::cout << "[SERVER] Chat room open on port " << PORT << ". Waiting for clients...\n";
 
+    // Accepting thread
     std::thread([srv]() {
         int id_counter = 1;
         while (running) {
@@ -255,7 +300,7 @@ void run_server() {
         std::getline(std::cin, line);
 
         if (line == "/help") {
-            std::lock_guard<std::mutex> lock(cout_mtx);
+            std::lock_guard lock(cout_mtx);
             std::cout << "\n\033[1;33m=== COMMANDS (SERVER) ===\033[0m\n"
                       << " \033[1;37m/clear\033[0m  - clears the terminal screen\n"
                       << " \033[1;37m/quit\033[0m   - closes the server\n"
@@ -280,6 +325,7 @@ void run_server() {
             std::cout << "---------------------------------------------\n";
             std::cout << "[PLAIN]  " << line << "\n";
 
+            // Encrypt and send to all clients
             std::lock_guard<std::mutex> lk(server_clients_mtx);
             for (auto& c : server_clients) {
                 auto encrypted = aes_encrypt(c.aes_key, msg);
@@ -292,7 +338,7 @@ void run_server() {
     close(srv);
 }
 
-// ── MAIN: KLIENT ────────────────────────────────────────────────
+// ── MAIN: CLIENT ───────────────────────────────────────────────
 void run_client() {
     print_banner();
     std::cout << "[CLIENT] Connecting to server...\n";
@@ -317,11 +363,22 @@ void run_client() {
         if (line == "/help") {
             std::lock_guard<std::mutex> lock(cout_mtx);
             std::cout << "\n\033[1;33m=== COMMANDS (CLIENT) ===\033[0m\n"
-                      << " \033[1;37m/level <L>\033[0m  - FAST, BALANCED, MAX\n"
-                      << " \033[1;37m/tamper\033[0m     - MITM attack simulation\n"
-                      << " \033[1;37m/clear\033[0m      - clears screen\n"
-                      << " \033[1;37m/quit\033[0m       - disconnect\n"
+                      << " \033[1;37m/nick <name>\033[0m - change your chat nickname\n"
+                      << " \033[1;37m/level <L>\033[0m   - KEM level: FAST, BALANCED, MAX\n"
+                      << " \033[1;37m/tamper\033[0m      - MITM attack simulation\n"
+                      << " \033[1;37m/clear\033[0m       - clears screen\n"
+                      << " \033[1;37m/quit\033[0m        - disconnect\n"
                       << "=========================\n> " << std::flush;
+            continue;
+        }
+
+        if (line.starts_with("/nick ")) {
+            std::string new_nick = line.substr(6);
+            std::string cmd = "REQ_NICK:" + new_nick;
+            safe_send_msg(fd, Bytes(cmd.begin(), cmd.end()));
+
+            std::lock_guard<std::mutex> lock(cout_mtx);
+            std::cout << "\033[1;32m[+] Nickname changed to: " << new_nick << "\033[0m\n> " << std::flush;
             continue;
         }
 

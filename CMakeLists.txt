@@ -23,6 +23,7 @@ add_executable(Quill main.cpp
         src/network/NetworkClient.cpp
         src/network/NetworkClient.h
         src/protocol/MessageFormat.cpp
-        src/protocol/MessageFormat.h)
+        src/protocol/MessageFormat.h
+        )
 target_include_directories(Quill PRIVATE ${OQS_INCLUDE})
 target_link_libraries(Quill PRIVATE ${OQS_LIB} OpenSSL::Crypto)

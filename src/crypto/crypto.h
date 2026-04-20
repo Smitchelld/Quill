@@ -54,14 +54,14 @@ inline Bytes kyber_decaps(const std::string& level, const Bytes& ct, const Bytes
 // ── AES-256-GCM ────────────────────────────────────────────────
 inline Bytes aes_encrypt(const Bytes& key, const std::string& plaintext) {
     Bytes nonce(12);
-    RAND_bytes(nonce.data(), nonce.size());
+    RAND_bytes(nonce.data(), static_cast<int>(nonce.size()));
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
     EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr);
     EVP_EncryptInit_ex(ctx, nullptr, nullptr, key.data(), nonce.data());
     Bytes ciphertext(plaintext.size());
     int len = 0, total = 0;
-    EVP_EncryptUpdate(ctx, ciphertext.data(), &len, reinterpret_cast<const uint8_t*>(plaintext.data()), plaintext.size());
+    EVP_EncryptUpdate(ctx, ciphertext.data(), &len, reinterpret_cast<const uint8_t*>(plaintext.data()), static_cast<int>(plaintext.size()));
     total = len;
     EVP_EncryptFinal_ex(ctx, ciphertext.data() + len, &len);
     total += len;
@@ -78,7 +78,7 @@ inline Bytes aes_encrypt(const Bytes& key, const std::string& plaintext) {
 inline std::string aes_decrypt(const Bytes& key, const Bytes& data) {
     if (data.size() < 28) throw std::runtime_error("Message too short");
     const uint8_t *nonce = data.data(), *ct = data.data() + 12, *tag = data.data() + data.size() - 16;
-    int ct_len = data.size() - 28;
+    int ct_len = static_cast<int>(data.size()) - 28;
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
     EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, nullptr);

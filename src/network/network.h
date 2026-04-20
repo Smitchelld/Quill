@@ -7,7 +7,6 @@
 #include <unistd.h>
 #include <vector>
 #include <string>
-#include <cstring>
 
 using Bytes = std::vector<uint8_t>;
 
@@ -55,7 +54,7 @@ inline int make_client(const char* host, int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{AF_INET, htons((uint16_t)port)};
     inet_pton(AF_INET, host, &addr.sin_addr);
-    if (connect(fd, (sockaddr*)&addr, sizeof(addr)) < 0) throw std::runtime_error("Connect failed");
+    if (connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) throw std::runtime_error("Connect failed");
     return fd;
 }
 

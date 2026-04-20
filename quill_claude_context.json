@@ -1,0 +1,212 @@
+{
+  "project": {
+    "name": "Quill",
+    "type": "academic",
+    "description": "Post-quantum encrypted P2P messenger. Classical asymmetric algorithms (RSA, ECDH) are vulnerable to Shor's algorithm on quantum computers. This project implements a fully quantum-safe communication protocol based on NIST PQC standards (FIPS 203, 204, 205) published in 2024.",
+    "university": "AGH Kraków",
+    "department": "Informatyka i Systemy Inteligentne",
+    "course": "Studio projektowe (sem. 6)",
+    "team_size": 2,
+    "estimated_hours_per_person": 40,
+    "language": "C++23",
+    "future_use": "Base for engineering thesis on intelligent PQC algorithm selection"
+  },
+
+  "priorities": {
+    "primary": "SECURITY — every decision must prioritize cryptographic correctness over convenience",
+    "secondary": "CORRECTNESS — working crypto before any UI or optimization",
+    "tertiary": "CLARITY — code must be readable and defensible in academic review",
+    "anti_goals": [
+      "Do NOT optimize prematurely",
+      "Do NOT reimplement crypto primitives — use liboqs and OpenSSL",
+      "Do NOT reuse nonces under any circumstance",
+      "Do NOT skip signature verification steps",
+      "Do NOT use classical asymmetric crypto (RSA, ECDH, DH) anywhere"
+    ]
+  },
+
+  "current_state": {
+    "done": [
+      "liboqs built and installed from source",
+      "crypto.hpp — Kyber-768 keygen, encaps, decaps",
+      "crypto.hpp — AES-256-GCM encrypt/decrypt with random nonce",
+      "network.hpp — TCP server/client, length-prefixed send/recv",
+      "main.cpp — working CLI demo: server + client, Kyber handshake over TCP, encrypted chat"
+    ],
+    "not_done": [
+      "Dilithium digital signatures",
+      "Full handshake protocol with signature verification",
+      "nlohmann/json message format",
+      "Multi-client support (std::thread)",
+      "Security levels (FAST/BALANCED/MAX)",
+      "Forward secrecy (new keys per session)",
+      "File transfer with chunking + SHA-3",
+      "Handshake visualization with timing",
+      "Rooms/channels",
+      "Benchmarks"
+    ]
+  },
+
+  "stack": {
+    "language": "C++23",
+    "build_system": "CMake (min 3.20)",
+    "crypto_pqc": "liboqs (Open Quantum Safe) — MIT license, built from source",
+    "crypto_symmetric": "OpenSSL (Apache 2.0) — AES-256-GCM, RAND_bytes, SHA-3",
+    "networking": "POSIX sockets (Linux)",
+    "serialization": "nlohmann/json — not yet integrated",
+    "testing": "Google Test — not yet integrated",
+    "frontend": "undecided — CLI for now, possibly ImGui or React+WebSocket later",
+    "os": "Arch Linux (primary dev), target cross-platform"
+  },
+
+  "crypto": {
+    "key_exchange": {
+      "algorithm": "CRYSTALS-Kyber (ML-KEM, FIPS 203)",
+      "levels": {
+        "FAST":     { "variant": "Kyber-512",  "nist_level": 1, "equivalent": "AES-128", "use_case": "IoT, real-time" },
+        "BALANCED": { "variant": "Kyber-768",  "nist_level": 3, "equivalent": "AES-192", "use_case": "default" },
+        "MAX":      { "variant": "Kyber-1024", "nist_level": 5, "equivalent": "AES-256", "use_case": "critical data" }
+      },
+      "default": "Kyber-768",
+      "liboqs_id": "OQS_KEM_alg_kyber_768"
+    },
+    "signatures": {
+      "algorithm": "CRYSTALS-Dilithium (ML-DSA, FIPS 204) — default",
+      "levels": {
+        "FAST":     { "variant": "FALCON-512",  "notes": "fast, small sigs, requires FPU" },
+        "BALANCED": { "variant": "Dilithium3",  "notes": "default, straightforward impl" },
+        "MAX":      { "variant": "SPHINCS+",    "notes": "hash-based, 10-950x slower than FALCON, most secure" }
+      },
+      "default": "Dilithium3",
+      "liboqs_id": "OQS_SIG_alg_dilithium_3"
+    },
+    "session_encryption": {
+      "algorithm": "AES-256-GCM",
+      "rationale": "quantum-safe — Grover reduces to 128-bit effective security, still secure",
+      "key_derivation": "first 32 bytes of Kyber shared_secret (demo), HKDF in production",
+      "nonce": "12 bytes, random per message via RAND_bytes — NEVER reuse",
+      "tag": "16 bytes GCM auth tag appended to ciphertext",
+      "wire_format": "nonce(12B) + ciphertext + tag(16B)"
+    },
+    "integrity": {
+      "algorithm": "SHA-3",
+      "use_case": "file transfer verification"
+    },
+    "forward_secrecy": {
+      "description": "New Kyber keypair generated per session",
+      "status": "not yet implemented"
+    },
+    "critical_rules": [
+      "Never reuse a nonce with the same key",
+      "Every message chunk gets its own nonce",
+      "Always verify Dilithium signatures before trusting any key material",
+      "Never fall back to classical crypto"
+    ]
+  },
+
+  "protocol": {
+    "transport": "TCP with length-prefixed framing: uint32_t (big-endian) + payload bytes",
+    "handshake": {
+      "description": "Custom PQC handshake protocol",
+      "steps": [
+        {
+          "step": 1,
+          "direction": "CLIENT → SERVER",
+          "name": "ClientHello",
+          "contains": ["chosen security level", "supported algorithms list"]
+        },
+        {
+          "step": 2,
+          "direction": "SERVER → CLIENT",
+          "name": "ServerHello",
+          "contains": ["selected algorithm", "Kyber public key", "Dilithium/FALCON signature over pubkey"]
+        },
+        {
+          "step": 3,
+          "direction": "CLIENT → SERVER",
+          "name": "ClientKeyExchange",
+          "contains": ["Kyber ciphertext (encaps of shared_secret)", "client Kyber public key", "Dilithium/FALCON signature"]
+        },
+        {
+          "step": 4,
+          "direction": "SERVER → CLIENT",
+          "name": "ServerFinished",
+          "contains": ["Dilithium/FALCON signature confirming session"]
+        },
+        {
+          "step": 5,
+          "name": "SessionEstablished",
+          "result": "AES-256 key = KDF(shared_secret), all further data encrypted with AES-256-GCM"
+        }
+      ]
+    },
+    "message_format": {
+      "encoding": "JSON",
+      "schema": {
+        "type": "string — message | file_chunk | file_end | handshake | ping",
+        "algo": "string — e.g. kyber768+dilithium3",
+        "nonce": "string — base64 encoded, 12 bytes",
+        "payload": "string — base64 encoded encrypted data",
+        "signature": "string — base64 encoded Dilithium/FALCON signature",
+        "timestamp": "integer — unix timestamp",
+        "chunk_index": "integer — for file transfers",
+        "total_chunks": "integer — for file transfers",
+        "file_hash_sha3": "string — base64, SHA-3 hash of full file"
+      }
+    }
+  },
+
+  "architecture": {
+    "structure": {
+      "src/crypto":   "CryptoManager, KyberKEM, DilithiumSign, AesGcm",
+      "src/network":  "NetworkServer, NetworkClient, SocketWrapper",
+      "src/protocol": "HandshakeProtocol, MessageFormat, SessionManager",
+      "src/app":      "RoomManager, UserManager, CLI",
+      "include":      "public headers (.hpp)",
+      "tests":        "Google Test unit tests",
+      "docs":         "documentation"
+    },
+    "concurrency": "std::thread per client, std::mutex for shared state",
+    "files": {
+      "crypto.hpp":  "Kyber keygen/encaps/decaps, AES-256-GCM encrypt/decrypt — DONE",
+      "network.hpp": "TCP server/client, send_msg/recv_msg with length prefix — DONE",
+      "main.cpp":    "CLI entry point, server/client modes — DONE (basic)"
+    }
+  },
+
+  "known_issues": {
+    "pqc_key_sizes": "Kyber-1024 public key ~1568B vs 32B in ECDH — protocol must handle large messages",
+    "nonce_reuse": "CRITICAL — AES-GCM is catastrophically broken if nonce reused with same key",
+    "falcon_fpu": "FALCON-512 requires FPU for efficient operation",
+    "sphincs_speed": "SPHINCS+ is 10-950x slower than FALCON for signing — only use in MAX mode",
+    "nat_traversal": "P2P across different networks requires NAT traversal — not yet addressed",
+    "kdf": "Current demo uses raw shared_secret bytes as AES key — should use HKDF in production"
+  },
+
+  "next_steps_priority_order": [
+    "1. Add Dilithium signatures to HandshakeProtocol",
+    "2. Integrate nlohmann/json for wire format",
+    "3. Multi-client support with std::thread",
+    "4. Security level selection (FAST/BALANCED/MAX) at runtime",
+    "5. Handshake visualization with per-step timing in ms",
+    "6. Forward secrecy (new keypair per session)",
+    "7. File transfer with 64KB chunking + SHA-3 verification",
+    "8. Google Test unit tests for all crypto operations",
+    "9. Benchmarks comparing algorithm variants"
+  ],
+
+  "ai_assistant_instructions": {
+    "language": "Respond in Polish unless asked otherwise",
+    "code_language": "C++23",
+    "focus": "Security correctness above all else — always flag any crypto misuse",
+    "style": "Prefer clear, readable code over clever one-liners — this is academic code",
+    "libs": "Use liboqs for all PQC, OpenSSL for AES/SHA/RAND — do not suggest other crypto libs",
+    "when_suggesting_code": [
+      "Always handle OQS_KEM_free and OQS_SIG_free to avoid memory leaks",
+      "Always use RAND_bytes for nonce generation, never deterministic values",
+      "Always verify signatures before using any received key material",
+      "Prefer std::vector<uint8_t> (aliased as Bytes) for raw byte buffers",
+      "Use C++23 features freely (structured bindings, ranges, etc.)"
+    ]
+  }
+}
