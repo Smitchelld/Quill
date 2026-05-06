@@ -5,10 +5,13 @@
 #ifndef QUILL_NETWORKCLIENT_H
 #define QUILL_NETWORKCLIENT_H
 
+#include <string>
+#include "Socket.h"
 
 
-class NetworkClient {
-
+class NetworkClient : public Socket {
+public:
+    void connect_to(const std::string& host, int port);
 };
 
 

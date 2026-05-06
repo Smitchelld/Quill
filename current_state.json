@@ -1,0 +1,46 @@
+{
+  "project": "Quill - Post-Quantum Encrypted P2P Messenger",
+  "status_date": "2024-05-20",
+  "version": "0.5.0-alpha",
+  "current_state": {
+    "done": [
+      "Obiektowa warstwa sieciowa (Socket, NetworkServer, NetworkClient)",
+      "Kryptografia hybrydowa: ML-KEM (Kyber) dla wymiany kluczy",
+      "Kryptografia autentykująca: ML-DSA (Dilithium) dla podpisów cyfrowych - ochrona MitM",
+      "AES-256-GCM z unikalnym Nonce na każdą wiadomość",
+      "Protokół komunikacyjny oparty na JSON (nlohmann/json) z kodowaniem binarnym",
+      "Wielowątkowa obsługa wielu klientów na serwerze (std::thread per client)",
+      "Interfejs ImGui z wizualizacją kroków Handshake'a i logowaniem sesji",
+      "Zgodność z oficjalnymi standardami NIST FIPS 203 i 204 (liboqs 0.10+)"
+    ],
+    "in_progress": [
+      "Automatyczne usuwanie rozłączonych klientów z listy serwera (cleanup loop)",
+      "Obsługa błędów parsowania JSON przy uszkodzonych pakietach"
+    ],
+    "todo": [
+      "Przesyłanie plików z chunkingiem i hashowaniem SHA-3",
+      "Zarządzanie tożsamością (stałe klucze Dilithium dla stałych użytkowników)",
+      "Pokoje rozmów (Rooms/Channels)",
+      "Testy jednostkowe Google Test dla warstwy krypto",
+      "Benchmarki wydajnościowe dla poziomów FAST/BALANCED/MAX"
+    ]
+  },
+  "technical_stack": {
+    "language": "C++23",
+    "crypto_pqc": "liboqs (ML-KEM-768, ML-DSA-65)",
+    "crypto_sym": "OpenSSL (AES-256-GCM)",
+    "serialization": "nlohmann/json (binary mode)",
+    "ui": "ImGui (GLFW + OpenGL3)",
+    "networking": "POSIX Sockets (TCP)"
+  },
+  "protocol_details": {
+    "handshake": "Wzajemnie uwierzytelniony Handshake PQC: Serwer podpisuje klucz Kyber -> Klient weryfikuje i podpisuje szyfrogram KEM -> Serwer weryfikuje.",
+    "wire_format": "Length-prefixed JSON binary object",
+    "security_logic": "Każda wiadomość zawiera: {type, sender, nonce, payload, timestamp}. Nonce jest generowany przez RAND_bytes i przesyłany obok szyfrogramu."
+  },
+  "critical_notes_for_ai": {
+    "compilation": "Wymaga linkowania OpenSSL, liboqs oraz nlohmann_json. Kolejność w CMake jest kluczowa dla uniknięcia 'undefined reference'.",
+    "security": "System rzuca wyjątki przy błędzie weryfikacji podpisu lub tagu GCM, co skutkuje natychmiastowym rozłączeniem (Fail-fast).",
+    "liboqs_update": "Używamy makr OQS_SIG_alg_ml_dsa_65 i OQS_KEM_alg_kyber_768 zgodnie z najnowszą wersją biblioteki."
+  }
+}
