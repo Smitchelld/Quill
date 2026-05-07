@@ -50,6 +50,7 @@ add_executable(Quill
         src/frontend/ChatApp.cpp
         src/frontend/ChatApp.h
         src/frontend/Theme.h
+        src/frontend/ChatAppRender.cpp
 
 )
 

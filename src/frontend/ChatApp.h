@@ -2,13 +2,13 @@
 #define QUILL_CHATAPP_H
 
 #include "imgui.h"
-#include <nlohmann/json.hpp>
-
 #include "../crypto/KyberKEM.h"
 #include "../crypto/DilithiumSign.h"
 #include "../crypto/AesGcm.h"
 #include "../network/NetworkServer.h"
 #include "../network/NetworkClient.h"
+#include "../network/Socket.h"
+#include <nlohmann/json.hpp>
 
 #include <thread>
 #include <mutex>
@@ -17,11 +17,13 @@
 #include <vector>
 #include <atomic>
 #include <chrono>
-#include <memory>
+#include <map>
+#include <set>
 
-using json = nlohmann::json;
+using json  = nlohmann::json;
+using Bytes = std::vector<uint8_t>;
 
-// ── TRYBY I STRUKTURY ──────────────────────────────────────────────
+// ── TYPY ──────────────────────────────────────────────────────────
 
 enum class AppMode { NONE, SERVER, CLIENT };
 
@@ -35,11 +37,37 @@ struct HandshakeStep {
     double      time_ms;
 };
 
+// Szacowany czas złamania — wyświetlany w UI
+struct SecurityEstimate {
+    std::string algorithm;
+    std::string classical_supercomputer;  // np. "2^128 ops → praktycznie nieskończony"
+    std::string quantum_computer;         // np. "2^64 ops → ~1000 lat @ 10^12 ops/s"
+    std::string verdict;                  // "SAFE" / "WARNING" / "BROKEN"
+    ImVec4      verdict_color;
+};
+
+// Wyniki benchmarku jednego poziomu
+struct BenchmarkResult {
+    std::string level;           // FAST / BALANCED / MAX
+    double      keygen_ms;
+    double      encaps_ms;
+    double      decaps_ms;
+    double      sign_ms;
+    double      verify_ms;
+    double      aes_enc_ms;
+    double      aes_dec_ms;
+    double      total_hs_ms;
+    bool        done = false;
+};
+
 struct ConnectedClient {
     std::shared_ptr<Socket> sock;
     Bytes                   aes_key;
     std::string             name;
+    std::string             room = "general";  // pokój klienta
 };
+
+// ── CHATAPP ───────────────────────────────────────────────────────
 
 class ChatApp {
 public:
@@ -48,54 +76,102 @@ public:
     void render();
 
 private:
-    AppMode m_mode = AppMode::NONE;
+    // ── TRYB ────────────────────────────────────────────────────
+    AppMode     m_mode      = AppMode::NONE;
 
-    // Połączenia
-    std::unique_ptr<NetworkServer> m_server;
-    std::unique_ptr<NetworkClient> m_client;
-    std::vector<ConnectedClient>   m_clients;
-    std::mutex                     m_clients_mtx;
-
-    // Klucze sesji
-    Bytes m_session_key;
-    std::mutex m_session_mtx;
+    // ── SESJA KLIENTA ────────────────────────────────────────────
+    Bytes       m_session_key;
+    std::mutex  m_session_mtx;
     std::atomic<bool> m_connected{false};
 
-    // UI & Logi
-    std::deque<ChatMessage>   m_log;
-    std::mutex                m_log_mtx;
+    // ── SERWER ───────────────────────────────────────────────────
+    std::unique_ptr<NetworkServer>       m_server;
+    std::vector<ConnectedClient>         m_clients;
+    std::mutex                           m_clients_mtx;
+
+    // ── SOCKET KLIENTA ───────────────────────────────────────────
+    std::unique_ptr<NetworkClient>  m_client;
+
+    // ── POKOJE ───────────────────────────────────────────────────
+    // Serwer: lista pokojów → lista nazw klientów
+    std::map<std::string, std::set<std::string>> m_rooms;
+    std::mutex                                    m_rooms_mtx;
+    std::string  m_current_room = "general";   // aktualny pokój klienta
+
+    // ── LOG CZATU per pokój ───────────────────────────────────────
+    std::map<std::string, std::deque<ChatMessage>> m_room_logs;
+    std::mutex                                      m_log_mtx;
+
+    // ── HANDSHAKE VISUALIZER ─────────────────────────────────────
     std::deque<HandshakeStep> m_hs_steps;
     std::mutex                m_hs_mtx;
+    double                    m_hs_total_ms = 0.0;
 
-    char m_input_buf[2048]{};
-    char m_host_buf[64]{"127.0.0.1"};
-    int  m_port = 7777;
+    // ── BENCHMARKI ───────────────────────────────────────────────
+    std::vector<BenchmarkResult> m_benchmarks;
+    std::mutex                   m_bench_mtx;
+    bool                         m_bench_running = false;
+    bool                         m_show_benchmarks = false;
+
+    // ── SECURITY ESTIMATES ───────────────────────────────────────
+    bool m_show_security = false;
+
+    // ── UI STATE ─────────────────────────────────────────────────
+    char        m_input_buf[2048]{};
+    char        m_host_buf[64]{"127.0.0.1"};
+    int         m_port           = 7777;
     std::string m_security_level = "BALANCED";
-    bool m_tamper = false;
+    bool        m_tamper         = false;
     std::atomic<int> m_msg_count{0};
 
-    // Logika sieciowa
-    void start_server();
-    void start_client();
-    void send_chat_msg(const std::string& text);
-    void recv_loop_client();
-    void server_client_handler(std::shared_ptr<Socket> sock, int id);
+    // nowy pokój — bufor dla UI
+    char        m_new_room_buf[64]{};
 
-    // Handshake
-    Bytes do_client_handshake(Socket& sock, const std::string& level);
-    Bytes do_server_handshake(Socket& sock, const std::string& level);
-
-    // Renderowanie UI (fragmenty)
+    // ── RENDER ───────────────────────────────────────────────────
     void render_setup_panel();
     void render_status_bar();
     void render_chat_panel(float width, float height);
     void render_handshake_panel(float width, float height);
     void render_input_bar();
+    void render_benchmark_window();
+    void render_security_window();
+    void render_rooms_sidebar(float width, float height);
 
-    // Helpery
-    void log(const std::string& text, ImVec4 color = {0.85f, 0.85f, 0.85f, 1.0f});
+    // ── LOGIKA ───────────────────────────────────────────────────
+    void start_server();
+    void start_client();
+    void send_chat_msg(const std::string& text);
+    void server_client_handler(std::shared_ptr<Socket> sock, int id);
+
+    // ── HANDSHAKE ────────────────────────────────────────────────
+    Bytes do_client_handshake(Socket& sock, const std::string& level);
+    Bytes do_server_handshake(Socket& sock, const std::string& level);
+
+    // ── BENCHMARKI ───────────────────────────────────────────────
+    void run_benchmarks();
+    static BenchmarkResult benchmark_level(const std::string& level);
+
+    // ── SECURITY ESTIMATES ───────────────────────────────────────
+    static std::vector<SecurityEstimate> build_security_estimates(
+        const std::string& level);
+
+    // ── POKOJE ───────────────────────────────────────────────────
+    void join_room(const std::string& room);   // klient wysyła JOIN
+    void create_room(const std::string& room); // serwer tworzy pokój
+    void broadcast_to_room(const std::string& room,
+                           const std::string& msg,
+                           std::shared_ptr<Socket> exclude = nullptr);
+
+    // ── LOG HELPERS ──────────────────────────────────────────────
+    void log(const std::string& text,
+             ImVec4 color,
+             const std::string& room = "general");
     void hs_step(const std::string& label, double time_ms = -1.0);
+    void hs_clear();
+
     static std::string hex_preview(const Bytes& data, size_t n = 8);
+    static double      ms(std::chrono::high_resolution_clock::time_point a,
+                          std::chrono::high_resolution_clock::time_point b);
 };
 
-#endif
+#endif // QUILL_CHATAPP_H
