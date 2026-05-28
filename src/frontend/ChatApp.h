@@ -9,6 +9,7 @@
 #include "../network/NetworkClient.h"
 #include "../network/Socket.h"
 #include <nlohmann/json.hpp>
+#include "../protocol/FileTransfer.h"
 
 #include <thread>
 #include <mutex>
@@ -40,15 +41,15 @@ struct HandshakeStep {
 // Szacowany czas złamania — wyświetlany w UI
 struct SecurityEstimate {
     std::string algorithm;
-    std::string classical_supercomputer;  // np. "2^128 ops → praktycznie nieskończony"
-    std::string quantum_computer;         // np. "2^64 ops → ~1000 lat @ 10^12 ops/s"
-    std::string verdict;                  // "SAFE" / "WARNING" / "BROKEN"
+    std::string classical_supercomputer;
+    std::string quantum_computer;
+    std::string verdict;
     ImVec4      verdict_color;
 };
 
-// Wyniki benchmarku jednego poziomu
+// Wyniki benchmarku
 struct BenchmarkResult {
-    std::string level;           // FAST / BALANCED / MAX
+    std::string level;
     double      keygen_ms;
     double      encaps_ms;
     double      decaps_ms;
@@ -60,11 +61,19 @@ struct BenchmarkResult {
     bool        done = false;
 };
 
+// Statystyki dla Security Dashboard
+struct CryptoStats {
+    std::string kem_name;
+    std::string dsa_name;
+    int         kem_pub_size;
+    int         dsa_sig_size;
+};
+
 struct ConnectedClient {
     std::shared_ptr<Socket> sock;
     Bytes                   aes_key;
     std::string             name;
-    std::string             room = "general";  // pokój klienta
+    std::string             room = "general";
 };
 
 // ── CHATAPP ───────────────────────────────────────────────────────
@@ -93,10 +102,9 @@ private:
     std::unique_ptr<NetworkClient>  m_client;
 
     // ── POKOJE ───────────────────────────────────────────────────
-    // Serwer: lista pokojów → lista nazw klientów
     std::map<std::string, std::set<std::string>> m_rooms;
     std::mutex                                    m_rooms_mtx;
-    std::string  m_current_room = "general";   // aktualny pokój klienta
+    std::string  m_current_room = "general";
 
     // ── LOG CZATU per pokój ───────────────────────────────────────
     std::map<std::string, std::deque<ChatMessage>> m_room_logs;
@@ -124,8 +132,29 @@ private:
     bool        m_tamper         = false;
     std::atomic<int> m_msg_count{0};
 
-    // nowy pokój — bufor dla UI
     char        m_new_room_buf[64]{};
+
+    std::string m_last_raw_nonce = "N/A";
+    std::string m_last_raw_cipher = "N/A";
+
+    char m_filepath_buf[512]{};
+    char m_download_dir_buf[512]{"received_files"};
+
+    // ── FILE TRANSFER ────────────────────────────────────────────
+    FileReceiver              m_file_receiver;
+    std::mutex                m_file_receiver_mtx;
+
+    struct FileTransferProgress {
+        std::string  file_name;
+        uint32_t     received   = 0;
+        uint32_t     total      = 0;
+        bool         done       = false;
+        bool         ok         = false;
+        std::string  error_msg;
+    };
+    std::map<std::string, FileTransferProgress> m_file_progress;
+    std::mutex                                  m_file_progress_mtx;
+
 
     // ── RENDER ───────────────────────────────────────────────────
     void render_setup_panel();
@@ -142,36 +171,35 @@ private:
     void start_client();
     void send_chat_msg(const std::string& text);
     void server_client_handler(std::shared_ptr<Socket> sock, int id);
+    void send_file(const std::filesystem::path& path);
 
     // ── HANDSHAKE ────────────────────────────────────────────────
     Bytes do_client_handshake(Socket& sock, const std::string& level);
     Bytes do_server_handshake(Socket& sock, const std::string& level);
 
-    // ── BENCHMARKI ───────────────────────────────────────────────
+    // ── BENCHMARKI & STATYSTYKI ──────────────────────────────────
     void run_benchmarks();
     static BenchmarkResult benchmark_level(const std::string& level);
-
-    // ── SECURITY ESTIMATES ───────────────────────────────────────
-    static std::vector<SecurityEstimate> build_security_estimates(
-        const std::string& level);
+    static CryptoStats get_crypto_stats(const std::string& level);
+    static std::vector<SecurityEstimate> build_security_estimates(const std::string& level);
 
     // ── POKOJE ───────────────────────────────────────────────────
-    void join_room(const std::string& room);   // klient wysyła JOIN
-    void create_room(const std::string& room); // serwer tworzy pokój
+    void join_room(const std::string& room);
+    void create_room(const std::string& room);
     void broadcast_to_room(const std::string& room,
                            const std::string& msg,
                            std::shared_ptr<Socket> exclude = nullptr);
 
     // ── LOG HELPERS ──────────────────────────────────────────────
-    void log(const std::string& text,
-             ImVec4 color,
-             const std::string& room = "general");
+    void log(const std::string& text, ImVec4 color, const std::string& room = "general");
     void hs_step(const std::string& label, double time_ms = -1.0);
     void hs_clear();
 
     static std::string hex_preview(const Bytes& data, size_t n = 8);
     static double      ms(std::chrono::high_resolution_clock::time_point a,
                           std::chrono::high_resolution_clock::time_point b);
+
+    void broadcast_raw_to_room(const std::string &room, const std::string &raw_json, std::shared_ptr<Socket> exclude);
 };
 
 #endif // QUILL_CHATAPP_H

@@ -1,46 +1,50 @@
 {
   "project": "Quill - Post-Quantum Encrypted P2P Messenger",
-  "status_date": "2024-05-20",
-  "version": "0.5.0-alpha",
+  "status_date": "2024-05-24",
+  "version": "0.8.0-beta",
   "current_state": {
     "done": [
       "Obiektowa warstwa sieciowa (Socket, NetworkServer, NetworkClient)",
-      "Kryptografia hybrydowa: ML-KEM (Kyber) dla wymiany kluczy",
-      "Kryptografia autentykująca: ML-DSA (Dilithium) dla podpisów cyfrowych - ochrona MitM",
-      "AES-256-GCM z unikalnym Nonce na każdą wiadomość",
+      "Kryptografia KEM: ML-KEM (Kyber-512/768/1024) za pomocą liboqs",
+      "Kryptografia autentykująca: ML-DSA (Dilithium-65/87) i Falcon-512 dla podpisów cyfrowych",
+      "Szyfrowanie sesji: AES-256-GCM z unikalnym Nonce na każdą wiadomość (OpenSSL)",
+      "Pełny PQC Handshake (z obustronnym uwierzytelnianiem i enkapsulacją)",
       "Protokół komunikacyjny oparty na JSON (nlohmann/json) z kodowaniem binarnym",
       "Wielowątkowa obsługa wielu klientów na serwerze (std::thread per client)",
-      "Interfejs ImGui z wizualizacją kroków Handshake'a i logowaniem sesji",
-      "Zgodność z oficjalnymi standardami NIST FIPS 203 i 204 (liboqs 0.10+)"
+      "Rozbudowany interfejs ImGui z autorskim motywem (Theme.h)",
+      "Pokoje rozmów (Rooms/Channels) z izolacją wiadomości",
+      "Mechanizm Perfect Forward Secrecy (PFS) - rotacja kluczy sesyjnych w locie",
+      "Moduł Benchmarków z porównaniem poziomów FAST/BALANCED/MAX",
+      "Security Dashboard, wizualizacja kroków Handshake oraz szacunki bezpieczeństwa",
+      "Narzędzia audytorskie: Packet Inspector (Wire View) i symulator ataku MitM (Tamper)"
     ],
     "in_progress": [
-      "Automatyczne usuwanie rozłączonych klientów z listy serwera (cleanup loop)",
-      "Obsługa błędów parsowania JSON przy uszkodzonych pakietach"
+      "Refaktoryzacja warstwy krypto do ujednoliconego CryptoManager (zaczęte pliki)",
+      "Oczyszczanie martwych połączeń (częściowo obsługiwane przez try-catch w serwerze)"
     ],
     "todo": [
-      "Przesyłanie plików z chunkingiem i hashowaniem SHA-3",
-      "Zarządzanie tożsamością (stałe klucze Dilithium dla stałych użytkowników)",
-      "Pokoje rozmów (Rooms/Channels)",
-      "Testy jednostkowe Google Test dla warstwy krypto",
-      "Benchmarki wydajnościowe dla poziomów FAST/BALANCED/MAX"
+      "Przesyłanie plików z chunkingiem 64KB i hashowaniem SHA-3",
+      "Zarządzanie tożsamością (stałe klucze ML-DSA/Falcon zapisywane na dysku - obecnie generowane w locie)",
+      "Testy jednostkowe Google Test dla warstwy krypto i protokołu",
+      "NAT Traversal dla połączeń P2P przez Internet (obecnie opiera się na prostym TCP)"
     ]
   },
   "technical_stack": {
     "language": "C++23",
-    "crypto_pqc": "liboqs (ML-KEM-768, ML-DSA-65)",
+    "crypto_pqc": "liboqs (ML-KEM-512/768/1024, ML-DSA-65/87, Falcon-512)",
     "crypto_sym": "OpenSSL (AES-256-GCM)",
-    "serialization": "nlohmann/json (binary mode)",
+    "serialization": "nlohmann/json (binary & base64 modes)",
     "ui": "ImGui (GLFW + OpenGL3)",
     "networking": "POSIX Sockets (TCP)"
   },
   "protocol_details": {
-    "handshake": "Wzajemnie uwierzytelniony Handshake PQC: Serwer podpisuje klucz Kyber -> Klient weryfikuje i podpisuje szyfrogram KEM -> Serwer weryfikuje.",
-    "wire_format": "Length-prefixed JSON binary object",
-    "security_logic": "Każda wiadomość zawiera: {type, sender, nonce, payload, timestamp}. Nonce jest generowany przez RAND_bytes i przesyłany obok szyfrogramu."
+    "handshake": "1. ServerHello (DSA Key+Sig), 2. ClientKeyExchange (KEM Encapsulation + DSA Sig), 3. Session KDF (Shared Secret -> AES-256 Key).",
+    "wire_format": "Length-prefixed JSON string z zakodowanymi binariami (nlohmann/json binary_t).",
+    "security_logic": "Każda wiadomość Chat AES-GCM zawiera: nonce (12B), ciphertext i tag (16B). Odrzucenie paczki powoduje natychmiastowy alert (Fail-fast)."
   },
   "critical_notes_for_ai": {
-    "compilation": "Wymaga linkowania OpenSSL, liboqs oraz nlohmann_json. Kolejność w CMake jest kluczowa dla uniknięcia 'undefined reference'.",
-    "security": "System rzuca wyjątki przy błędzie weryfikacji podpisu lub tagu GCM, co skutkuje natychmiastowym rozłączeniem (Fail-fast).",
-    "liboqs_update": "Używamy makr OQS_SIG_alg_ml_dsa_65 i OQS_KEM_alg_kyber_768 zgodnie z najnowszą wersją biblioteki."
+    "compilation": "Wymaga linkowania OpenSSL, liboqs oraz nlohmann_json, GLFW, OpenGL3. Threading z pthread.",
+    "security": "PFS (rotacja kluczy) przebiega bez przerywania połączenia TCP (nowy PQC Handshake na żądanie).",
+    "levels": "FAST (Kyber512+Falcon512), BALANCED (Kyber768+MLDSA65), MAX (Kyber1024+MLDSA87)."
   }
 }
