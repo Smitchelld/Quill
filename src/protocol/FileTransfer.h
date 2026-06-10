@@ -38,6 +38,10 @@ public:
 
     // Oblicza SHA-3-256 dla surowych danych
     static Bytes sha3_256(const Bytes& data);
+
+    // AAD wiąże chunk z transfer_id i indeksem: "FILE|<tid>|<index>".
+    // Podmiana metadanych w JSON psuje tag GCM.
+    static Bytes chunk_aad(const std::string& transfer_id, uint32_t chunk_index);
 };
 
 // ── IncomingFile ──────────────────────────────────────────────────

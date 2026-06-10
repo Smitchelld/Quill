@@ -23,6 +23,20 @@ static void validate_name(const std::string& name) {
                 "Profil: dozwolone znaki w nazwie to [a-zA-Z0-9_-]");
 }
 
+static void validate_passphrase(const std::string& passphrase) {
+    if (passphrase.size() < ProfileManager::MIN_PASSPHRASE_LEN)
+        throw std::runtime_error(
+            "Passphrase musi miec minimum " +
+            std::to_string(ProfileManager::MIN_PASSPHRASE_LEN) + " znakow");
+    // Odrzucamy np. "aaaaaaaa" — zerowa entropia mimo długości
+    bool all_same = true;
+    for (size_t i = 1; i < passphrase.size(); ++i) {
+        if (passphrase[i] != passphrase[0]) { all_same = false; break; }
+    }
+    if (all_same)
+        throw std::runtime_error("Passphrase jest zbyt slaby (powtarzajacy sie znak)");
+}
+
 fs::path ProfileManager::profiles_root() {
     if (const char* env = std::getenv("QUILL_PROFILES_DIR"); env && *env)
         return fs::path(env);
@@ -81,6 +95,7 @@ std::vector<ProfileInfo> ProfileManager::list() {
 
 ProfileInfo ProfileManager::create(const std::string& name, const std::string& passphrase) {
     validate_name(name);
+    validate_passphrase(passphrase);
 
     fs::path dir = profiles_root() / name;
     if (fs::exists(dir))
@@ -100,7 +115,7 @@ ProfileInfo ProfileManager::create(const std::string& name, const std::string& p
         ProfileInfo info;
         info.name        = name;
         info.fingerprint = IdentityManager::fingerprint(kp.public_key);
-        info.encrypted   = !passphrase.empty();
+        info.encrypted   = true;
         info.dir         = dir;
         write_meta(info);
         return info;

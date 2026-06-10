@@ -24,6 +24,8 @@ struct ProfileInfo {
 
 class ProfileManager {
 public:
+    static constexpr size_t MIN_PASSPHRASE_LEN = 8;
+
     // $QUILL_PROFILES_DIR lub ~/.quill/profiles
     static std::filesystem::path profiles_root();
 
@@ -31,8 +33,9 @@ public:
 
     // Tworzy profil i od razu generuje tożsamość BALANCED (dzięki temu
     // przy logowaniu jest co weryfikować passphrase'em).
-    // Pusty passphrase = klucze plaintext (świadoma decyzja użytkownika).
-    // Rzuca std::runtime_error: zła nazwa / profil istnieje / błąd krypto.
+    // Passphrase: min. MIN_PASSPHRASE_LEN znaków, nie może być jednym powtarzanym znakiem.
+    // Klucze zawsze szyfrowane (QID2).
+    // Rzuca std::runtime_error: zła nazwa / słaby passphrase / profil istnieje / błąd krypto.
     static ProfileInfo create(const std::string& name, const std::string& passphrase);
 
     // Odblokowuje profil: aktywuje IdentityManager i weryfikuje passphrase

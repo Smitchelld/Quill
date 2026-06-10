@@ -119,11 +119,17 @@ sudo cmake --install .
 ### Build
 
 ```bash
-git clone https://github.com/yourusername/quill
-cd quill
+git clone --recurse-submodules https://github.com/Smitchelld/Quill.git
+cd Quill
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
+```
+
+If you already cloned without submodules:
+
+```bash
+git submodule update --init --recursive
 ```
 
 ### Tests
@@ -156,8 +162,8 @@ quill/
 │   ├── network/         # Socket, NetworkServer, NetworkClient (TCP, length-prefixed framing)
 │   ├── protocol/        # MessageFormat (JSON), FileTransfer (chunking + SHA-3)
 │   └── frontend/        # ImGui ChatApp, rendering, Theme
-├── tests/               # Google Test suite (87 tests), linked against quill_core
-├── third_party/         # ImGui, portable-file-dialogs
+├── tests/               # Google Test suite (89 tests), linked against quill_core
+├── third_party/         # ImGui (git submodule), portable-file-dialogs
 ├── main.cpp             # GLFW/OpenGL3 + ImGui entry point
 └── CMakeLists.txt
 ```
@@ -192,7 +198,7 @@ quill/
 ## Known limitations
 
 - **No PKI** — trust is TOFU-based (like SSH/Signal): the first connection stores the peer key, fingerprints must be compared out-of-band to reach VERIFIED. There is no certificate authority — intentional for scope.
-- **Passphrase strength is the only offline defense** — identity keys are encrypted at rest with Argon2id + AES-256-GCM, but an attacker with the key file mounts an offline attack; there is deliberately no retry lockout (it would be security theater). Profiles with an empty passphrase store keys in plaintext (`0600`) and the UI warns about it.
+- **Passphrase strength is the only offline defense** — identity keys are encrypted at rest with Argon2id + AES-256-GCM, but an attacker with the key file mounts an offline attack; there is deliberately no retry lockout (it would be security theater). New profiles require a passphrase of at least 8 characters (repeated single-character strings rejected); legacy profiles can still be unlocked with their original passphrase.
 - **Server-relayed, not end-to-end** — the server is a trusted relay: it decrypts each message from the sender and re-encrypts it per recipient under that link's session key. Every hop is AES-256-GCM, but the server sees plaintext. This is an intentional hub-and-spoke design; true E2E would require a separate per-recipient key agreement.
 - **NAT traversal** — direct TCP, no STUN/TURN. Both peers must be reachable at a known address.
 
@@ -215,7 +221,7 @@ quill/
 - [x] Local profiles with login — at-rest key encryption (Argon2id + AES-256-GCM)
 - [x] TOFU (known_hosts per profile, UNVERIFIED/KNOWN/VERIFIED, fail-closed block on key change)
 - [x] Replay protection for chat — per-direction sequence numbers bound via GCM AAD (fail-closed)
-- [x] Google Test suite — 87 tests (RFC vectors, tamper + AAD/replay cases, TOFU attack scenarios, socketpair handshake integration)
+- [x] Google Test suite — 89 tests (RFC vectors, tamper + AAD/replay cases, TOFU attack scenarios, socketpair handshake integration)
 - [ ] File transfer: selective repeat retransmission, per-chunk SHA-3
 - [ ] NAT traversal (UDP hole punching + rendezvous server)
 - [ ] Engineering thesis: intelligent PQC algorithm selection

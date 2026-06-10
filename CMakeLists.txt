@@ -2,29 +2,38 @@ cmake_minimum_required(VERSION 3.20)
 project(Quill)
 set(CMAKE_CXX_STANDARD 23)
 
+option(QUILL_BUILD_GUI "Build ImGui application (requires GLFW/OpenGL + imgui submodule)" ON)
+
 # ── DEPENDENCIES ──────────────────────────────────────────────────
 find_package(OpenSSL REQUIRED)
-find_package(glfw3   REQUIRED)
-find_package(OpenGL  REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_library(OQS_LIB oqs REQUIRED)
 find_path(OQS_INCLUDE oqs/oqs.h REQUIRED)
 
-# ── IMGUI (third_party/imgui) ─────────────────────────────────────
-set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
-add_library(imgui STATIC
-        ${IMGUI_DIR}/imgui.cpp
-        ${IMGUI_DIR}/imgui_draw.cpp
-        ${IMGUI_DIR}/imgui_tables.cpp
-        ${IMGUI_DIR}/imgui_widgets.cpp
-        ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
-        ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-)
-target_include_directories(imgui PUBLIC
-        ${IMGUI_DIR}
-        ${IMGUI_DIR}/backends
-)
-target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
+if (QUILL_BUILD_GUI)
+    find_package(glfw3  REQUIRED)
+    find_package(OpenGL REQUIRED)
+
+    # ── IMGUI (git submodule: third_party/imgui) ──────────────────
+    set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
+    if (NOT EXISTS "${IMGUI_DIR}/imgui.cpp")
+        message(FATAL_ERROR
+            "Missing Dear ImGui. Run: git submodule update --init --recursive")
+    endif()
+    add_library(imgui STATIC
+            ${IMGUI_DIR}/imgui.cpp
+            ${IMGUI_DIR}/imgui_draw.cpp
+            ${IMGUI_DIR}/imgui_tables.cpp
+            ${IMGUI_DIR}/imgui_widgets.cpp
+            ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+            ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    )
+    target_include_directories(imgui PUBLIC
+            ${IMGUI_DIR}
+            ${IMGUI_DIR}/backends
+    )
+    target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
+endif()
 
 # ── QUILL CORE (krypto + sieć + protokół, bez UI — testowalne) ────
 add_library(quill_core STATIC
@@ -54,12 +63,14 @@ target_link_libraries(quill_core PUBLIC
 )
 
 # ── GŁÓWNY BINARY ─────────────────────────────────────────────────
-add_executable(Quill
-        main.cpp
-        src/frontend/ChatApp.cpp
-        src/frontend/ChatAppRender.cpp
-)
-target_link_libraries(Quill PRIVATE quill_core imgui)
+if (QUILL_BUILD_GUI)
+    add_executable(Quill
+            main.cpp
+            src/frontend/ChatApp.cpp
+            src/frontend/ChatAppRender.cpp
+    )
+    target_link_libraries(Quill PRIVATE quill_core imgui)
+endif()
 
 # ── TESTY (Google Test) ───────────────────────────────────────────
 enable_testing()

@@ -166,7 +166,8 @@ private:
     char        m_input_buf[2048]{};
     char        m_host_buf[64]{"127.0.0.1"};
     int         m_port           = 7777;
-    std::string m_security_level = "BALANCED";
+    mutable std::mutex m_security_level_mtx;
+    std::string        m_security_level = "BALANCED";
     bool        m_tamper         = false;
     std::atomic<int> m_msg_count{0};
 
@@ -239,6 +240,10 @@ private:
     void perform_pfs_rotation(std::shared_ptr<Socket> sock, const std::string& level);
     void request_pfs_rotation(const std::string& room);
     bool take_pending_pfs_rotation(const std::shared_ptr<Socket>& sock);
+
+    // Thread-safe odczyt/zapis poziomu PQC (UI + wątki sieciowe)
+    std::string security_level() const;
+    void set_security_level(std::string level);
 
     // ── LOG HELPERS ──────────────────────────────────────────────
     void log(const std::string& text, ImVec4 color, const std::string& room = "general");

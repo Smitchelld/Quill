@@ -82,7 +82,7 @@ void ChatApp::render_status_bar() {
         ImGui::TextColored(Theme::green(),     "●"); ImGui::SameLine();
         ImGui::TextColored(Theme::primary(),   "QuantumShield"); ImGui::SameLine();
         ImGui::TextColored(Theme::dim(),       "|"); ImGui::SameLine();
-        ImGui::TextColored(Theme::blue_text(), "%s", m_security_level.c_str()); ImGui::SameLine();
+        ImGui::TextColored(Theme::blue_text(), "%s", security_level().c_str()); ImGui::SameLine();
         ImGui::TextColored(Theme::secondary(), "ML-KEM + ML-DSA + AES-GCM"); ImGui::SameLine();
         ImGui::TextColored(Theme::dim(),       "|"); ImGui::SameLine();
         ImGui::TextColored(Theme::dim(),       "msgs: %d", m_msg_count.load()); ImGui::SameLine();
@@ -167,9 +167,9 @@ void ChatApp::render_login_panel() {
                              m_new_prof_pass2_buf, sizeof(m_new_prof_pass2_buf),
                              ImGuiInputTextFlags_Password);
 
-    if (m_new_prof_pass1_buf[0] == '\0')
-        ImGui::TextColored(Theme::yellow(),
-            "(!) pusty passphrase = klucz na dysku BEZ ochrony");
+    ImGui::TextColored(Theme::dim(),
+        "Passphrase: min. %zu znakow, nie sam powtarzajacy sie znak",
+        ProfileManager::MIN_PASSPHRASE_LEN);
 
     if (ImGui::Button("  CREATE PROFILE  ", {ImGui::GetContentRegionAvail().x, 30}))
         do_create_profile(std::string(m_new_prof_name_buf),
@@ -214,10 +214,10 @@ void ChatApp::render_setup_panel() {
 
     float btn_w = (ImGui::GetContentRegionAvail().x - 8.0f) / 3.0f;
     for (auto& lvl : {"FAST", "BALANCED", "MAX"}) {
-        bool sel = (m_security_level == lvl);
+        bool sel = (security_level() == lvl);
         if (sel) ImGui::PushStyleColor(ImGuiCol_Button,        Theme::accent());
         if (sel) ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::accent());
-        if (ImGui::Button(lvl, {btn_w, 28})) m_security_level = lvl;
+        if (ImGui::Button(lvl, {btn_w, 28})) set_security_level(lvl);
         if (sel) ImGui::PopStyleColor(2);
         ImGui::SameLine(0, 4);
     }
@@ -330,7 +330,7 @@ void ChatApp::render_handshake_panel(float width, float height) {
     ImGui::TextColored(Theme::dim(), "SECURITY DASHBOARD");
     ImGui::Separator();
 
-    CryptoStats stats = get_crypto_stats(m_security_level);
+    CryptoStats stats = get_crypto_stats(security_level());
     if (ImGui::BeginTable("##DashTable", 2)) {
         ImGui::TableSetupColumn("K", ImGuiTableColumnFlags_WidthFixed, 65.0f);
         ImGui::TableSetupColumn("V", ImGuiTableColumnFlags_WidthStretch);
@@ -430,7 +430,7 @@ void ChatApp::render_handshake_panel(float width, float height) {
 
         // Forward Secrecy Button
         if (ImGui::Button("ROTATE SESSION KEY (PFS)", {width - 16.f, 26})) {
-            json j; j["type"] = "REQ_LEVEL"; j["level"] = m_security_level;
+            json j; j["type"] = "REQ_LEVEL"; j["level"] = security_level();
             std::string s = j.dump();
             if (m_client) m_client->send_bytes(Bytes(s.begin(), s.end()));
         }
@@ -439,11 +439,11 @@ void ChatApp::render_handshake_panel(float width, float height) {
         ImGui::TextColored(Theme::dim(), "CHANGE LEVEL");
         float bw = (width - 28.0f - 8.0f) / 3.0f;
         for (auto& lvl : {"FAST", "BALANCED", "MAX"}) {
-            bool sel = (m_security_level == lvl);
+            bool sel = (security_level() == lvl);
             if (sel) ImGui::PushStyleColor(ImGuiCol_Button, Theme::accent());
             if (sel) ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::accent());
             if (ImGui::Button(lvl, {bw, 22})) {
-                m_security_level = lvl;
+                set_security_level(lvl);
                 json j; j["type"] = "REQ_LEVEL"; j["level"] = lvl;
                 std::string s = j.dump();
                 if (m_client) m_client->send_bytes(Bytes(s.begin(), s.end()));
@@ -717,7 +717,7 @@ void ChatApp::render_security_window() {
     ImGui::Begin("Security Estimates", &m_show_security);
 
     ImGui::TextColored(Theme::secondary(),
-        "Szacowany czas złamania — poziom: %s", m_security_level.c_str());
+        "Szacowany czas złamania — poziom: %s", security_level().c_str());
     ImGui::Spacing();
     ImGui::TextColored(Theme::dim(),
         "Zakładamy: klasyczny superkomputer = 10^15 op/s, "
@@ -725,7 +725,7 @@ void ChatApp::render_security_window() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    auto estimates = build_security_estimates(m_security_level);
+    auto estimates = build_security_estimates(security_level());
     for (auto& e : estimates) {
         ImGui::TextColored(Theme::blue_text(), "%s", e.algorithm.c_str());
         ImGui::TextColored(Theme::dim(),      "  Klasyczny:  "); ImGui::SameLine();

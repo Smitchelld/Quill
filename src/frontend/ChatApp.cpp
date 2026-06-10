@@ -20,6 +20,16 @@ ChatApp::ChatApp() {
     m_room_logs["general"] = {};
 }
 
+std::string ChatApp::security_level() const {
+    std::lock_guard lk(m_security_level_mtx);
+    return m_security_level;
+}
+
+void ChatApp::set_security_level(std::string level) {
+    std::lock_guard lk(m_security_level_mtx);
+    m_security_level = std::move(level);
+}
+
 ChatApp::~ChatApp() {
     m_connected = false;
     if (m_client) m_client->close_socket();
@@ -66,6 +76,11 @@ void ChatApp::do_login(const std::string& name, const std::string& passphrase) {
 
 void ChatApp::do_create_profile(const std::string& name,
                                 const std::string& pass1, const std::string& pass2) {
+    if (pass1.size() < ProfileManager::MIN_PASSPHRASE_LEN) {
+        m_login_error = "Passphrase musi miec minimum " +
+            std::to_string(ProfileManager::MIN_PASSPHRASE_LEN) + " znakow";
+        return;
+    }
     if (pass1 != pass2) {
         m_login_error = "Passphrase'y nie sa identyczne";
         return;
@@ -415,7 +430,7 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
 
     try {
         // Handshake musi wykonywać się BEZ blokowania głównego m_clients_mtx
-        Bytes key = do_server_handshake(*sock, m_security_level);
+        Bytes key = do_server_handshake(*sock, security_level());
 
         {
             std::lock_guard lk(m_clients_mtx);
@@ -445,7 +460,7 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
             // Rotacja PFS inicjowana przez serwer (auto co N wiadomości) — tylko w tym wątku
             if (take_pending_pfs_rotation(sock)) {
                 try {
-                    perform_pfs_rotation(sock, m_security_level);
+                    perform_pfs_rotation(sock, security_level());
                 } catch (const std::exception& e) {
                     log(std::string("PFS rotation failed: ") + e.what(),
                         Theme::red(), room);
@@ -544,9 +559,11 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                     }
 
                     // 1. Odszyfruj chunk (serwer musi znać plaintext, żeby go przepakować)
+                    uint32_t idx  = j["chunk_index"].get<uint32_t>();
                     Bytes nonce   = j["nonce"].get<Bytes>();
                     Bytes payload = j["payload"].get<Bytes>();
-                    Bytes plain_chunk = AesGcm::decrypt_bytes(s_key, nonce, payload);
+                    Bytes plain_chunk = AesGcm::decrypt_bytes(
+                        s_key, nonce, payload, FileSender::chunk_aad(tid, idx));
 
                     // 2. Obsługa lokalnego odbioru na serwerze (opcjonalnie, do logów/zapisu)
                     {
@@ -567,7 +584,8 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                     for (auto& c : m_clients) {
                         if (c.room == room && c.sock != sock && c.sock) {
                             // Szyfrujemy chunk nowym, unikalnym kluczem docelowego klienta
-                            auto enc = AesGcm::encrypt(c.aes_key, plain_chunk);
+                            auto enc = AesGcm::encrypt(
+                                c.aes_key, plain_chunk, FileSender::chunk_aad(tid, idx));
 
                             json out_j = j; // kopiujemy metadane (type, tid, chunk_index)
                             out_j["nonce"]   = enc.nonce;
@@ -631,7 +649,7 @@ void ChatApp::start_client() {
             m_client = std::make_unique<NetworkClient>();
             m_client->connect_to(m_host_buf, m_port);
 
-            Bytes key = do_client_handshake(*m_client, m_security_level);
+            Bytes key = do_client_handshake(*m_client, security_level());
             { std::lock_guard lk(m_session_mtx); m_session_key = key; }
             m_send_seq = 0; m_recv_seq = 0;  // świeży licznik dla nowej sesji
 

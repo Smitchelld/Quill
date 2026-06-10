@@ -139,6 +139,37 @@ TEST_F(FileTransferTest, DuplicateChunksCountedOnce) {
     EXPECT_TRUE(ok) << err;
 }
 
+TEST_F(FileTransferTest, CrossTransferInjectionRejected) {
+    // Transfer A
+    make_source(10 * 1024);
+    auto packets_a = collect_packets();
+
+    // Transfer B (inny plik, inny transfer_id)
+    make_source(20 * 1024);
+    auto packets_b = collect_packets();
+
+    FileReceiver rx;
+    rx.on_start(json::parse(packets_b[0]));
+
+    // Chunk z transferu A wstrzyknięty do B (metadane wskazują na B)
+    json injected = json::parse(packets_a[1]);
+    injected["transfer_id"] = json::parse(packets_b[0])["transfer_id"];
+
+    EXPECT_THROW(rx.on_chunk(injected, key32()), std::runtime_error);
+}
+
+TEST_F(FileTransferTest, WrongChunkIndexRejected) {
+    make_source(150 * 1024); // >= 2 chunki
+    auto packets = collect_packets();
+
+    json chunk = json::parse(packets[2]); // chunk_index == 1
+    chunk["chunk_index"] = 0;             // podmiana indeksu
+
+    FileReceiver rx;
+    rx.on_start(json::parse(packets[0]));
+    EXPECT_THROW(rx.on_chunk(chunk, key32()), std::runtime_error);
+}
+
 TEST(FileTransferHash, Sha3KnownVector) {
     // SHA3-256("") — oficjalny wektor NIST
     EXPECT_EQ(hex(FileSender::sha3_256({})),

@@ -30,18 +30,20 @@
       "TOFU UI: sekcja PEER TRUST w panelu handshake (stan + MARK AS VERIFIED), okno Tools > Trusted Peers (lista, Verify, Remove), alert MITM z oboma fingerprintami w logu",
       "CryptoManager: cały PQC handshake (klient+serwer), TOFU, HKDF i tożsamość w jednej warstwie bez zależności od UI; ChatApp::do_*_handshake to cienkie wrappery (logi+visualizer); TofuMismatchError z fingerprintami expected/received; inwarianty (verify przed encaps/decaps, fail-closed TOFU, cleanse) egzekwowane w warstwie krypto",
       "Ochrona przed replay + AAD: AES-256-GCM przyjmuje teraz AAD (opcjonalny, domyślnie pusty = zgodność wsteczna). Wiadomości CHAT mają monotoniczny numer sekwencji per kierunek (klient: m_send_seq/m_recv_seq; serwer: send_seq/recv_seq w ConnectedClient) wiązany przez AAD='CHAT|<seq>'. Odbiorca odrzuca seq<=ostatni (fail-closed); podmiana seq w JSON psuje tag GCM. Liczniki resetowane przy każdym handshake/rotacji PFS (stary szyfrogram i tak nie deszyfruje się nowym kluczem).",
-      "Testy Google Test (tests/, 87 testów): Hkdf (wektory RFC 5869), Argon2, AesGcm (tamper/wrong key/nonce + AAD: roundtrip, zły/brakujący/niespodziewany AAD, wiązanie seq jako anty-replay), KyberKEM i DilithiumSign (wszystkie poziomy), IdentityManager (QID1/QID2, złe hasło, migracja, uprawnienia, korupcja), ProfileManager (path traversal), TrustStore (pełny cykl TOFU + atak), MessageFormat, FileTransfer (uszkodzony/zgubiony chunk, zły hash), CryptoManager (integracyjny handshake przez socketpair, MITM blocked, tampered ciphertext)",
+      "Testy Google Test (tests/, 91 testów): Hkdf (wektory RFC 5869), Argon2, AesGcm (tamper/wrong key/nonce + AAD: roundtrip, zły/brakujący/niespodziewany AAD, wiązanie seq jako anty-replay), KyberKEM i DilithiumSign (wszystkie poziomy), IdentityManager (QID1/QID2, złe hasło, migracja, uprawnienia, korupcja), ProfileManager (path traversal), TrustStore (pełny cykl TOFU + atak), MessageFormat, FileTransfer (uszkodzony/zgubiony chunk, zły hash), CryptoManager (integracyjny handshake przez socketpair, MITM blocked, tampered ciphertext)",
       "Wzmocnienie QID1: suma SHA-3-256 payloadu w pliku (deterministyczna detekcja korupcji; sam self-test sign/verify nie łapał każdego przekłamania bajtu w ML-DSA sk)",
       "Bugfix MessageFormat: json::binary nie przeżywa dump()/parse() (tekstowy JSON nie ma typu binarnego) - nonce/payload serializowane teraz jako tablice; bug wykryty przez nowe testy",
       "Sprzątanie martwych połączeń: po rozłączeniu klient usuwany z m_clients i m_rooms (server_client_handler cleanup)",
-      "Fix auto-rotacji PFS w trybie serwera: usunięto błędne m_client->send_bytes (null deref). Rotacja serwerowa przez pending_pfs_rotation + perform_pfs_rotation w wątku handlera klienta; Socket::try_receive_bytes(500ms) pozwala obsłużyć kolejkę bez czekania na wiadomość od klienta"
+      "Fix auto-rotacji PFS w trybie serwera: usunięto błędne m_client->send_bytes (null deref). Rotacja serwerowa przez pending_pfs_rotation + perform_pfs_rotation w wątku handlera klienta; Socket::try_receive_bytes(500ms) pozwala obsłużyć kolejkę bez czekania na wiadomość od klienta",
+      "AAD dla FILE_CHUNK: FileSender::chunk_aad('FILE|tid|index') wiąże każdy chunk; sender, FileReceiver::on_chunk i relay serwera używają tego samego AAD; testy: cross-transfer injection, zły chunk_index",
+      "Wymóg niepustego passphrase przy tworzeniu profilu (ProfileManager::create + walidacja w UI); nowe profile zawsze encrypted=true (QID2)",
+      "Siła passphrase: MIN_PASSPHRASE_LEN=8, odrzucenie powtarzającego się jednego znaku (np. aaaaaaaa); walidacja w ProfileManager + UI; unlock bez zmiany polityki (legacy profile)"
     ],
     "in_progress": [],
     "todo": [
-      "Replay dla transferu plików: dodać AAD='FILE|tid|chunk_index' do FILE_CHUNK (obecnie chunki chronione dedupe po chunk_index + SHA-3-256 całości; wiązanie kontekstu byłoby dodatkowym wzmocnieniem)",
       "File transfer - ulepszenia: selective repeat (retransmisja brakujących chunków po chunk_index), SHA-3 per chunk dla wczesnej detekcji",
       "NAT Traversal: UDP hole punching z serwerem rendezvous (serwer widzi tylko IP:port, nie treść)",
-      "Szyfrowanie identity passphrase'em: rozważyć wymuszenie (obecnie pusty passphrase dozwolony)"
+      "Współdzielony stan wątków: m_security_level bez synchronizacji (m_msg_count już atomic)"
     ]
   },
   "known_issues": {
@@ -53,20 +55,6 @@
         "title": "Serwer widzi plaintext (hub-and-spoke, nie E2E)",
         "detail": "Serwer odszyfrowuje wiadomość od nadawcy i re-szyfruje ją osobno dla każdego odbiorcy (broadcast_to_room). Każdy hop to AES-256-GCM, ale serwer ma dostęp do treści. To świadoma decyzja architektoniczna, nie bug. Prawdziwy E2E wymagałby osobnej zgody na klucz per para odbiorców.",
         "fix": "Redesign: per-recipient key agreement / podwójny ratchet; duży zakres."
-      },
-      {
-        "id": "sec-file-replay-aad",
-        "severity": "med",
-        "title": "Brak AAD w chunkach plików",
-        "detail": "FILE_CHUNK nie wiąże transfer_id ani chunk_index przez AAD. Chronione tylko dedupe po chunk_index + SHA-3-256 całego pliku. Chunk z jednego transferu teoretycznie da się wstrzyknąć do innego.",
-        "fix": "AAD='FILE|'+transfer_id+'|'+chunk_index w encrypt/decrypt chunków (sender, relay serwera, odbiorca, FileReceiver::on_chunk)."
-      },
-      {
-        "id": "sec-empty-passphrase",
-        "severity": "med",
-        "title": "Pusty passphrase = klucz tożsamości w plaintext",
-        "detail": "Profil z pustym hasłem zapisuje klucz jako QID1 (plaintext, chmod 0600) z ostrzeżeniem w UI. Brak też wymogu siły hasła.",
-        "fix": "Wymusić niepuste hasło dla nowych profili (lub minimalna długość) + opcjonalny wskaznik siły."
       }
     ],
     "correctness": [

@@ -21,6 +21,13 @@ static std::string generate_transfer_id() {
     return oss.str();
 }
 
+// ── AAD ───────────────────────────────────────────────────────────
+
+Bytes FileSender::chunk_aad(const std::string& transfer_id, uint32_t chunk_index) {
+    std::string s = "FILE|" + transfer_id + "|" + std::to_string(chunk_index);
+    return Bytes(s.begin(), s.end());
+}
+
 // ── SHA-3-256 ─────────────────────────────────────────────────────
 
 Bytes FileSender::sha3_256(const Bytes& data) {
@@ -91,7 +98,7 @@ bool FileSender::send(const std::filesystem::path& file_path,
         Bytes  chunk_plain(file_data.begin() + offset, file_data.begin() + end);
 
         // Każdy chunk ma własny losowy nonce — nigdy nie reużywamy
-        auto enc = AesGcm::encrypt(aes_key, chunk_plain);
+        auto enc = AesGcm::encrypt(aes_key, chunk_plain, chunk_aad(transfer_id, i));
 
         json j;
         j["type"]        = "FILE_CHUNK";
@@ -151,7 +158,7 @@ void FileReceiver::on_chunk(const json& j, const Bytes& aes_key) {
     Bytes payload = j["payload"].get<Bytes>();
 
     // Rzuca std::runtime_error przy błędzie integralności GCM TAG
-    Bytes plain = AesGcm::decrypt_bytes(aes_key, nonce, payload);
+    Bytes plain = AesGcm::decrypt_bytes(aes_key, nonce, payload, FileSender::chunk_aad(tid, idx));
 
     if (it->second.chunks.count(idx) == 0) {
         it->second.chunks[idx] = std::move(plain);
