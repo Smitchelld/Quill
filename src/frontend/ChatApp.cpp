@@ -1,5 +1,8 @@
 #include "ChatApp.h"
 #include "Theme.h"
+#include "../crypto/Hkdf.h"
+#include "../crypto/IdentityManager.h"
+#include <openssl/crypto.h>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -94,17 +97,20 @@ Bytes ChatApp::do_client_handshake(Socket& sock, const std::string& level) {
         throw std::runtime_error("Server Identity Verification FAILED!");
     auto t1 = clk::now();
     hs_step("Server Signature Verified (ML-DSA)", ms(t0, t1));
+    log("Server fingerprint: " + IdentityManager::fingerprint(srv_sig_pub),
+        Theme::yellow(), m_current_room);
 
     auto t2 = clk::now();
     auto [ct, ss] = kem.encapsulate(srv_kyber_pub);
     auto t3 = clk::now();
     hs_step("KEM Encapsulation (ML-KEM)", ms(t2, t3));
 
+    // Trwała tożsamość: klucz ładowany z dysku (generowany tylko raz)
     auto t4        = clk::now();
-    auto my_sig_kp = signer.generate_keypair();
+    auto my_sig_kp = IdentityManager::load_or_generate(level);
     auto my_sig    = signer.sign(ct, my_sig_kp.secret_key);
     auto t5        = clk::now();
-    hs_step("Ciphertext Signed (ML-DSA)", ms(t4, t5));
+    hs_step("Identity Loaded + Ciphertext Signed (ML-DSA)", ms(t4, t5));
 
     json res;
     res["type"]       = "CLI_KEX";
@@ -116,19 +122,29 @@ Bytes ChatApp::do_client_handshake(Socket& sock, const std::string& level) {
     std::string s = res.dump();
     sock.send_bytes(Bytes(s.begin(), s.end()));
 
-    m_hs_total_ms = ms(t0, t5);
-    return Bytes(ss.begin(), ss.begin() + 32);
+    // KDF: klucz sesji = HKDF-SHA256(shared_secret), salt = transkrypt handshake'u
+    auto t6 = clk::now();
+    Bytes transcript = srv_kyber_pub;
+    transcript.insert(transcript.end(), ct.begin(), ct.end());
+    Bytes key = Hkdf::derive(ss, transcript, Hkdf::session_info(level));
+    OPENSSL_cleanse(ss.data(), ss.size()); // surowy sekret nie jest już potrzebny
+    auto t7 = clk::now();
+    hs_step("Session Key Derived (HKDF-SHA256)", ms(t6, t7));
+
+    m_hs_total_ms = ms(t0, t7);
+    return key;
 }
 
 Bytes ChatApp::do_server_handshake(Socket& sock, const std::string& level) {
     KyberKEM      kem(level);
     DilithiumSign signer(level);
 
+    // Kyber: efemeryczny per sesja (PFS). DSA: trwała tożsamość z dysku.
     auto t0       = clk::now();
     auto kyber_kp = kem.generate_keypair();
-    auto sig_kp   = signer.generate_keypair();
+    auto sig_kp   = IdentityManager::load_or_generate(level);
     auto t1       = clk::now();
-    hs_step("Keygen (ML-KEM + ML-DSA)", ms(t0, t1));
+    hs_step("Keygen (ML-KEM) + Identity Load (ML-DSA)", ms(t0, t1));
 
     auto srv_sig = signer.sign(kyber_kp.public_key, sig_kp.secret_key);
 
@@ -153,14 +169,25 @@ Bytes ChatApp::do_server_handshake(Socket& sock, const std::string& level) {
         throw std::runtime_error("Client Identity Verification FAILED!");
     auto t5 = clk::now();
     hs_step("Client Signature Verified (ML-DSA)", ms(t4, t5));
+    log("Client fingerprint: " + IdentityManager::fingerprint(cli_sig_pub),
+        Theme::yellow());
 
     auto t6 = clk::now();
     auto ss = kem.decapsulate(ct, kyber_kp.secret_key);
     auto t7 = clk::now();
     hs_step("KEM Decapsulation (ML-KEM)", ms(t6, t7));
 
-    m_hs_total_ms = ms(t0, t7);
-    return Bytes(ss.begin(), ss.begin() + 32);
+    // KDF: identyczny transkrypt po obu stronach → identyczny klucz sesji
+    auto t8 = clk::now();
+    Bytes transcript = kyber_kp.public_key;
+    transcript.insert(transcript.end(), ct.begin(), ct.end());
+    Bytes key = Hkdf::derive(ss, transcript, Hkdf::session_info(level));
+    OPENSSL_cleanse(ss.data(), ss.size()); // surowy sekret nie jest już potrzebny
+    auto t9 = clk::now();
+    hs_step("Session Key Derived (HKDF-SHA256)", ms(t8, t9));
+
+    m_hs_total_ms = ms(t0, t9);
+    return key;
 }
 
 // ── POKOJE ────────────────────────────────────────────────────────

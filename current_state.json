@@ -1,7 +1,7 @@
 {
   "project": "Quill - Post-Quantum Encrypted P2P Messenger",
-  "status_date": "2024-05-24",
-  "version": "0.8.0-beta",
+  "status_date": "2026-06-10",
+  "version": "0.9.0-beta",
   "current_state": {
     "done": [
       "Obiektowa warstwa sieciowa (Socket, NetworkServer, NetworkClient)",
@@ -16,35 +16,47 @@
       "Mechanizm Perfect Forward Secrecy (PFS) - rotacja kluczy sesyjnych w locie",
       "Moduł Benchmarków z porównaniem poziomów FAST/BALANCED/MAX",
       "Security Dashboard, wizualizacja kroków Handshake oraz szacunki bezpieczeństwa",
-      "Narzędzia audytorskie: Packet Inspector (Wire View) i symulator ataku MitM (Tamper)"
+      "Narzędzia audytorskie: Packet Inspector (Wire View) i symulator ataku MitM (Tamper)",
+      "Przesyłanie plików: chunking 64KB, AES-256-GCM per chunk, weryfikacja SHA-3-256 (FileSender/FileReceiver)",
+      "UI transferu plików: wybór pliku (portable-file-dialogs), paski postępu, katalog pobrań",
+      "HKDF-SHA256 (Hkdf.h/.cpp, OpenSSL EVP_KDF): klucz sesji wiązany z transkryptem handshake'u (salt = kyber_pub||ct), separacja domen (info = wersja protokołu + poziom), czyszczenie surowego sekretu (OPENSSL_cleanse), zweryfikowane wektorem RFC 5869",
+      "Identity management (IdentityManager.h/.cpp): trwałe klucze ML-DSA/Falcon w ~/.quill/identity (lub $QUILL_IDENTITY_DIR), chmod 0600/0700, zapis atomowy (tmp+rename), odmowa wczytania przy zbyt szerokich uprawnieniach (jak OpenSSH), self-test sign/verify po wczytaniu (uszkodzony klucz = wyjątek, nie cicha regeneracja)",
+      "Fingerprint tożsamości: SHA-3-256 klucza publicznego, 96 bitów, format A3F2-9C1B-44DE-F021-8B3C-7A09; logowany w UI po obu stronach handshake'u"
     ],
     "in_progress": [
-      "Refaktoryzacja warstwy krypto do ujednoliconego CryptoManager (zaczęte pliki)",
+      "Refaktoryzacja warstwy krypto do ujednoliconego CryptoManager (CryptoManager.h/.cpp to nadal pusty szkielet)",
       "Oczyszczanie martwych połączeń (częściowo obsługiwane przez try-catch w serwerze)"
     ],
+    "declared_in_presentation_but_missing_in_code": [
+      "TOFU: known_hosts, stany UNVERIFIED/KNOWN/VERIFIED, blokada przy zmianie klucza serwera (fingerprint już jest)",
+      "CryptoManager refactor: slajd mówi 'logika przeniesiona z ChatApp', klasa jest pusta",
+      "Testy Google Test: slajd deklaruje częściowe pokrycie KEM/DSA/AES-GCM, brak katalogu tests/"
+    ],
     "todo": [
-      "Przesyłanie plików z chunkingiem 64KB i hashowaniem SHA-3",
-      "Zarządzanie tożsamością (stałe klucze ML-DSA/Falcon zapisywane na dysku - obecnie generowane w locie)",
-      "Testy jednostkowe Google Test dla warstwy krypto i protokołu",
-      "NAT Traversal dla połączeń P2P przez Internet (obecnie opiera się na prostym TCP)"
+      "Profile + logowanie (ZAPLANOWANE, przed TOFU): ProfileManager (~/.quill/profiles/<name>/), szyfrowanie kluczy at rest (format QID2: Argon2id via EVP_KDF + AES-256-GCM, złe hasło = GCM tag fail, bez lockoutu), pusty passphrase dozwolony z ostrzeżeniem w UI, ekran logowania ImGui przed setup panelem, migracja QID1->QID2, wylogowanie = OPENSSL_cleanse",
+      "TOFU + weryfikacja fingerprint (model jak Signal: known_hosts W KATALOGU PROFILU, UNVERIFIED/KNOWN/VERIFIED, alert + blokada przy zmianie klucza)",
+      "Testy jednostkowe Google Test: krypto (KyberKEM, DilithiumSign, AesGcm), protokół (MessageFormat, FileTransfer), edge cases (uszkodzony chunk, zmiana klucza, replay attack)",
+      "File transfer - ulepszenia: selective repeat (retransmisja brakujących chunków po chunk_index), SHA-3 per chunk dla wczesnej detekcji",
+      "NAT Traversal: UDP hole punching z serwerem rendezvous (serwer widzi tylko IP:port, nie treść)"
     ]
   },
   "technical_stack": {
     "language": "C++23",
     "crypto_pqc": "liboqs (ML-KEM-512/768/1024, ML-DSA-65/87, Falcon-512)",
-    "crypto_sym": "OpenSSL (AES-256-GCM)",
+    "crypto_sym": "OpenSSL (AES-256-GCM, SHA-3-256)",
     "serialization": "nlohmann/json (binary & base64 modes)",
-    "ui": "ImGui (GLFW + OpenGL3)",
+    "ui": "ImGui (GLFW + OpenGL3) + portable-file-dialogs",
     "networking": "POSIX Sockets (TCP)"
   },
   "protocol_details": {
-    "handshake": "1. ServerHello (DSA Key+Sig), 2. ClientKeyExchange (KEM Encapsulation + DSA Sig), 3. Session KDF (Shared Secret -> AES-256 Key).",
+    "handshake": "1. ServerHello (DSA Key+Sig), 2. ClientKeyExchange (KEM Encapsulation + DSA Sig), 3. Session KDF: AES_key = HKDF-SHA256(shared_secret, salt=kyber_pub||ct, info='quill-aes256gcm-session-v1|LEVEL').",
     "wire_format": "Length-prefixed JSON string z zakodowanymi binariami (nlohmann/json binary_t).",
-    "security_logic": "Każda wiadomość Chat AES-GCM zawiera: nonce (12B), ciphertext i tag (16B). Odrzucenie paczki powoduje natychmiastowy alert (Fail-fast)."
+    "security_logic": "Każda wiadomość Chat AES-GCM zawiera: nonce (12B), ciphertext i tag (16B). Odrzucenie paczki powoduje natychmiastowy alert (Fail-fast).",
+    "file_transfer": "FILE_START (metadane) -> FILE_CHUNK (64KB, AES-GCM per chunk) -> FILE_END (SHA-3-256 całego pliku). Odbiorca składa chunki i weryfikuje hash przed zapisem."
   },
   "critical_notes_for_ai": {
     "compilation": "Wymaga linkowania OpenSSL, liboqs oraz nlohmann_json, GLFW, OpenGL3. Threading z pthread.",
-    "security": "PFS (rotacja kluczy) przebiega bez przerywania połączenia TCP (nowy PQC Handshake na żądanie).",
+    "security": "PFS (rotacja kluczy) przebiega bez przerywania połączenia TCP (nowy PQC Handshake na żądanie). Klucz sesji przez HKDF-SHA256 z wiązaniem transkryptu - nigdy surowy shared_secret. Klucze DSA trwałe (IdentityManager), Kyber zawsze efemeryczny. UWAGA: klucz tajny na dysku nieszyfrowany (0600) - known limitation. Do testów dwóch instancji na jednej maszynie ustaw rożne $QUILL_IDENTITY_DIR.",
     "levels": "FAST (Kyber512+Falcon512), BALANCED (Kyber768+MLDSA65), MAX (Kyber1024+MLDSA87)."
   }
 }

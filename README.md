@@ -76,7 +76,7 @@ ALICE                                          BOB
 | MITM protection | Dilithium signatures on both sides |
 | Forward secrecy | New Kyber keypair per session |
 | Session encryption | AES-256-GCM |
-| Key derivation | HKDF(shared\_secret) |
+| Key derivation | HKDF-SHA256, salt = handshake transcript |
 | Nonce safety | 96-bit random nonce per message |
 
 ---
@@ -88,8 +88,8 @@ Quill supports three configurable security levels, selectable at connection time
 | Level | KEM | Signature | NIST Level | Use case |
 |---|---|---|---|---|
 | `FAST` | Kyber-512 | FALCON-512 | 1 (~AES-128) | IoT, real-time |
-| `BALANCED` | Kyber-768 | Dilithium | 3 (~AES-192) | default |
-| `MAX` | Kyber-1024 | SPHINCS+ | 5 (~AES-256) | critical data |
+| `BALANCED` | Kyber-768 | ML-DSA-65 (Dilithium) | 3 (~AES-192) | default |
+| `MAX` | Kyber-1024 | ML-DSA-87 (Dilithium) | 5 (~AES-256) | critical data |
 
 ---
 
@@ -127,19 +127,13 @@ make -j$(nproc)
 
 ### Run
 
-Start the server (Bob):
+Quill ships as a single ImGui application — each instance can host (server) or connect (client):
 
 ```bash
-./quill_server 8443
+./Quill
 ```
 
-Connect as client (Alice):
-
-```bash
-./quill_client 127.0.0.1 8443
-```
-
-Both sides negotiate the handshake automatically. After `✓ Session established`, all messages are AES-256-GCM encrypted.
+Start one instance in **Server** mode, then connect another in **Client** mode (host, port, security level configurable in the setup panel). The PQC handshake runs automatically; after the secure tunnel is established, all messages and file transfers are AES-256-GCM encrypted.
 
 ---
 
@@ -148,15 +142,12 @@ Both sides negotiate the handshake automatically. After `✓ Session established
 ```
 quill/
 ├── src/
-│   ├── crypto/          # KyberKEM, DilithiumSign, AesGcm, HKDF
-│   ├── network/         # TCP server/client, length-prefixed framing
-│   ├── protocol/        # Handshake state machine, SessionManager
-│   └── app/             # CLI, RoomManager
-├── include/             # Public headers
-│   ├── crypto.h         # Kyber, AES-256-GCM primitives
-│   └── network.h        # send_msg / recv_msg framing
-├── tests/               # Google Test unit tests
-├── docs/                # Protocol specification
+│   ├── crypto/          # KyberKEM, DilithiumSign, AesGcm, SecurityLevel
+│   ├── network/         # Socket, NetworkServer, NetworkClient (TCP, length-prefixed framing)
+│   ├── protocol/        # MessageFormat (JSON), FileTransfer (chunking + SHA-3)
+│   └── frontend/        # ImGui ChatApp, rendering, Theme
+├── third_party/         # ImGui, portable-file-dialogs
+├── main.cpp             # GLFW/OpenGL3 + ImGui entry point
 └── CMakeLists.txt
 ```
 
@@ -190,8 +181,9 @@ quill/
 ## Known limitations
 
 - **Key distribution** — Dilithium public keys must be exchanged out-of-band before first connection (TOFU or pre-shared config). There is no PKI or certificate authority — intentional for scope, documented as future work.
+- **Identity keys stored in plaintext** — persistent signature keys live in `~/.quill/identity` with `0600` permissions (OpenSSH-style checks on load), but are not encrypted at rest. Passphrase encryption is future work.
+- **No known_hosts yet** — identity is persistent and fingerprints are displayed, but peers are not yet remembered across sessions (TOFU in progress).
 - **NAT traversal** — direct TCP, no STUN/TURN. Both peers must be reachable at a known address.
-- **Single session** — current demo supports one client at a time. Multi-client via `std::thread` is planned.
 
 ---
 
@@ -199,12 +191,20 @@ quill/
 
 - [x] Kyber-768 key exchange over TCP
 - [x] AES-256-GCM encrypted messaging
-- [ ] Dilithium signature verification (MITM protection)
-- [ ] HKDF key derivation
-- [ ] FAST / MAX security levels (FALCON, SPHINCS+)
-- [ ] Multi-client with `std::thread`
-- [ ] File transfer (64KB chunks, SHA-3 integrity)
-- [ ] Handshake visualizer with per-step timing
+- [x] Dilithium signature verification (MITM protection)
+- [x] FAST / BALANCED / MAX security levels (FALCON-512, ML-DSA-65/87)
+- [x] Multi-client with `std::thread`
+- [x] Rooms/channels with message isolation
+- [x] Perfect Forward Secrecy — on-the-fly key rotation
+- [x] Handshake visualizer with per-step timing, benchmarks, security dashboard
+- [x] File transfer (64KB chunks, AES-GCM per chunk, SHA-3-256 integrity)
+- [x] HKDF-SHA256 key derivation with handshake-transcript binding
+- [ ] Unified `CryptoManager` (refactor of crypto layer)
+- [x] Persistent identity keys (`~/.quill/identity`, 0600, self-test on load) + SHA-3 fingerprints
+- [ ] TOFU (known_hosts, UNVERIFIED/KNOWN/VERIFIED, block on key change)
+- [ ] Google Test unit tests (crypto, protocol, edge cases: corrupted chunk, key change, replay)
+- [ ] File transfer: selective repeat retransmission, per-chunk SHA-3
+- [ ] NAT traversal (UDP hole punching + rendezvous server)
 - [ ] Engineering thesis: intelligent PQC algorithm selection
 
 ---

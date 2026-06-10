@@ -37,6 +37,10 @@ add_executable(Quill
         src/crypto/DilithiumSign.h
         src/crypto/AesGcm.cpp
         src/crypto/AesGcm.h
+        src/crypto/Hkdf.cpp
+        src/crypto/Hkdf.h
+        src/crypto/IdentityManager.cpp
+        src/crypto/IdentityManager.h
         src/crypto/CryptoManager.cpp
         src/crypto/CryptoManager.h
         src/network/Socket.cpp

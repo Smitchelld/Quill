@@ -27,6 +27,11 @@ public:
 
     bool verify(const Bytes& message, const Bytes& signature, const Bytes& public_key) const;
 
+    // Metadane algorytmu — do walidacji kluczy wczytywanych z dysku
+    const char* algo_name()   const { return m_sig->method_name; }
+    size_t      pub_key_len() const { return m_sig->length_public_key; }
+    size_t      sec_key_len() const { return m_sig->length_secret_key; }
+
 private:
     OQS_SIG* m_sig = nullptr;
     static const char* resolve_algo(const std::string& level);
