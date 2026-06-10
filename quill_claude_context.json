@@ -38,19 +38,21 @@
       "Forward Secrecy (PFS) - key rotation",
       "Security levels and benchmarking tools",
       "HKDF-SHA256 session key derivation (Hkdf.h/.cpp): salt = handshake transcript (kyber_pub||ct), domain-separated info, raw secret cleansed after use, RFC 5869 test vector verified",
-      "Identity management (IdentityManager.h/.cpp): persistent ML-DSA/Falcon keys in ~/.quill/identity ($QUILL_IDENTITY_DIR override), 0600/0700 perms enforced on load (OpenSSH-style), atomic write, sign/verify self-test on load, SHA-3-256 fingerprint (XXXX-XXXX-... format) logged in UI",
+      "Identity management (IdentityManager.h/.cpp): persistent ML-DSA/Falcon keys, 0600/0700 perms enforced on load (OpenSSH-style), atomic write, sign/verify self-test on load, SHA-3-256 fingerprint (XXXX-XXXX-... format) logged in UI",
+      "Profiles + login: ProfileManager (~/.quill/profiles/<name>/ or $QUILL_PROFILES_DIR), profile.json with public fingerprint, name whitelist validation; QID2 at-rest encryption = Argon2id (EVP_KDF, t=3 m=64MiB, params stored in file) + AES-256-GCM; wrong passphrase = GCM tag fail (single indistinguishable error); QID1->QID2 in-place migration; empty passphrase = plaintext QID1 with UI warning; ImGui login screen, logout disabled during active session (keys needed for PFS rotation), OPENSSL_cleanse on logout/shutdown",
+      "TOFU (TrustStore.h/.cpp): known_hosts in profile dir (JSON, 0600, atomic write), states UNVERIFIED/KNOWN/VERIFIED/MISMATCH, comparison by full SHA-3-256 (short fingerprint is display-only); client keys peers by srv:host:port (full key-change detection, fail-closed BEFORE KEM encaps), server recognizes returning clients by key (cli:fingerprint); MISMATCH never overwrites the stored entry (explicit Remove required); corrupted known_hosts = hard error; UI: PEER TRUST section in handshake panel + MARK AS VERIFIED, Tools > Trusted Peers window (Verify/Remove)",
+      "CryptoManager: full PQC handshake (client+server), TOFU, HKDF and identity in one UI-free layer (quill_core static lib); ChatApp::do_*_handshake are thin wrappers (logs + visualizer via StepCallback); TofuMismatchError carries expected/received fingerprints; security invariants (verify before encaps/decaps, fail-closed TOFU, secret cleanse) enforced in the crypto layer",
+      "Google Test suite (tests/, 81 tests): RFC 5869 vectors, Argon2, AES-GCM tamper, Kyber+Dilithium all levels, identity (QID1/QID2, wrong pass, migration, perms, corruption), profiles (path traversal), TrustStore (full TOFU cycle + key-change attack), MessageFormat, FileTransfer (corrupted/missing chunk, bad hash), integration handshake over socketpair incl. MITM-block and tampered-ciphertext rejection",
+      "QID1 hardening: SHA-3-256 checksum appended to plaintext key files (deterministic corruption detection; sign/verify self-test alone did not catch every byte flip in ML-DSA sk)",
       "File transfer: 64KB chunking, AES-256-GCM per chunk, SHA-3-256 integrity check (FileSender/FileReceiver)",
       "File transfer UI: file picker (portable-file-dialogs), progress bars, download directory"
     ],
     "not_done": [
-      "Refactoring all crypto into CryptoManager (header/cpp exist but are empty stubs)",
-      "TOFU (known_hosts, UNVERIFIED/KNOWN/VERIFIED trust states, block on server key change; presentation claims done; fingerprint helper already exists in IdentityManager)",
-      "Profiles + login (PLANNED, do before TOFU): ProfileManager with ~/.quill/profiles/<name>/ layout, at-rest key encryption (QID2 format: Argon2id EVP_KDF + AES-256-GCM, wrong passphrase = GCM tag failure, deliberately no lockout), empty passphrase allowed with UI warning, ImGui login screen before setup panel, QID1->QID2 migration, logout = OPENSSL_cleanse; known_hosts will live inside the profile dir",
-      "Google Test unit tests (presentation claims partial KEM/DSA/AES-GCM coverage; no tests/ dir exists)",
       "File transfer improvements: selective repeat retransmission, per-chunk SHA-3",
-      "NAT Traversal: UDP hole punching + rendezvous server"
+      "NAT Traversal: UDP hole punching + rendezvous server",
+      "Replay protection at the chat-message level (no sequence numbers in CHAT messages)"
     ],
-    "warning": "Quill_Prezentacja.pptx (slides 2-4) declares TOFU/known_hosts, CryptoManager refactor and partial unit tests as DONE — these do not exist in code yet. Closing this gap is the top priority. (HKDF and identity management from the slides are now implemented.)"
+    "note": "Everything declared as DONE in Quill_Prezentacja.pptx now exists in code (file transfer, identity, TOFU, HKDF, CryptoManager, unit tests). Remaining items above were marked as 'planned' on the slides."
   },
 
   "stack": {
@@ -113,6 +115,9 @@
           "CryptoManager.cpp", "CryptoManager.h",
           "Hkdf.cpp", "Hkdf.h",
           "IdentityManager.cpp", "IdentityManager.h",
+          "Argon2.cpp", "Argon2.h",
+          "ProfileManager.cpp", "ProfileManager.h",
+          "TrustStore.cpp", "TrustStore.h",
           "DilithiumSign.cpp", "DilithiumSign.h",
           "KyberKEM.cpp", "KyberKEM.h",
           "SecurityLevel.h"
@@ -142,6 +147,7 @@
           "FileTransfer.cpp", "FileTransfer.h"
         ]
       },
+      "tests/": "Google Test suite (81 tests) — linked against quill_core static lib (crypto+network+protocol, no UI)",
       "third_party/": "External dependencies (ImGui, portable-file-dialogs.h)",
       "root/": {
         "description": "Entry point and build config",

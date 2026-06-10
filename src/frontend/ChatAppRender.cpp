@@ -21,6 +21,20 @@ void ChatApp::render() {
                 m_show_benchmarks = !m_show_benchmarks;
             if (ImGui::MenuItem("Security Estimates",  nullptr, m_show_security))
                 m_show_security   = !m_show_security;
+            if (ImGui::MenuItem("Trusted Peers",       nullptr, m_show_trusted,
+                                m_logged_in))
+                m_show_trusted    = !m_show_trusted;
+            ImGui::EndMenu();
+        }
+        if (m_logged_in && ImGui::BeginMenu("Profile")) {
+            ImGui::TextColored(Theme::secondary(), "%s", m_profile_name.c_str());
+            ImGui::TextColored(Theme::yellow(),    "%s", m_my_fingerprint.c_str());
+            if (!m_profile_encrypted)
+                ImGui::TextColored(Theme::red(), "klucz bez passphrase'a!");
+            ImGui::Separator();
+            // Wylogowanie zablokowane w trakcie sesji (klucze potrzebne do PFS)
+            if (ImGui::MenuItem("Logout", nullptr, false, m_mode == AppMode::NONE))
+                do_logout();
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -28,7 +42,9 @@ void ChatApp::render() {
 
     render_status_bar();
 
-    if (m_mode == AppMode::NONE) {
+    if (!m_logged_in) {
+        render_login_panel();
+    } else if (m_mode == AppMode::NONE) {
         render_setup_panel();
     } else {
         float avail_h = ImGui::GetContentRegionAvail().y - 110.0f;
@@ -46,6 +62,7 @@ void ChatApp::render() {
 
     if (m_show_benchmarks) render_benchmark_window();
     if (m_show_security)   render_security_window();
+    if (m_show_trusted)    render_trusted_window();
 
     ImGui::End();
 }
@@ -53,6 +70,14 @@ void ChatApp::render() {
 // ── STATUS BAR ────────────────────────────────────────────────────
 
 void ChatApp::render_status_bar() {
+    if (m_logged_in) {
+        ImGui::TextColored(Theme::blue_text(), "@%s", m_profile_name.c_str()); ImGui::SameLine();
+        ImGui::TextColored(Theme::dim(),       "[%s]", m_my_fingerprint.c_str()); ImGui::SameLine();
+        if (!m_profile_encrypted) {
+            ImGui::TextColored(Theme::red(), "(!)"); ImGui::SameLine();
+        }
+        ImGui::TextColored(Theme::dim(), "|"); ImGui::SameLine();
+    }
     if (m_connected) {
         ImGui::TextColored(Theme::green(),     "●"); ImGui::SameLine();
         ImGui::TextColored(Theme::primary(),   "QuantumShield"); ImGui::SameLine();
@@ -68,6 +93,102 @@ void ChatApp::render_status_bar() {
         ImGui::TextColored(Theme::secondary(), "QuantumShield — disconnected");
     }
     ImGui::Separator();
+}
+
+// ── LOGIN PANEL ───────────────────────────────────────────────────
+
+void ChatApp::render_login_panel() {
+    if (m_profiles_dirty) {
+        m_profiles = ProfileManager::list();
+        m_profiles_dirty = false;
+        if (m_selected_profile >= (int)m_profiles.size())
+            m_selected_profile = -1;
+    }
+
+    ImGui::Spacing();
+    float center = ImGui::GetContentRegionAvail().x * 0.5f - 180.0f;
+    ImGui::SetCursorPosX(center);
+    ImGui::BeginChild("login_card", {360.0f, 0.0f}, true);
+
+    ImGui::TextColored(Theme::primary(), "QUILL — IDENTITY");
+    ImGui::TextColored(Theme::dim(),
+        "Logowanie odblokowuje klucz tozsamosci na tym\n"
+        "urzadzeniu. Uwierzytelnienie wobec peera robi\n"
+        "podpis ML-DSA w handshake'u.");
+    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
+    // ── ISTNIEJĄCE PROFILE ──
+    ImGui::TextColored(Theme::secondary(), "PROFIL");
+    if (m_profiles.empty()) {
+        ImGui::TextColored(Theme::dim(), "(brak profili — utworz nowy ponizej)");
+    } else {
+        for (int i = 0; i < (int)m_profiles.size(); ++i) {
+            const auto& p = m_profiles[i];
+            bool sel = (m_selected_profile == i);
+            if (sel) ImGui::PushStyleColor(ImGuiCol_Button, Theme::accent());
+            std::string label = p.name + (p.encrypted ? "" : "  (bez hasla)");
+            if (ImGui::Button(label.c_str(), {ImGui::GetContentRegionAvail().x, 26}))
+                m_selected_profile = i;
+            if (sel) ImGui::PopStyleColor();
+            if (sel)
+                ImGui::TextColored(Theme::dim(), "  %s", p.fingerprint.c_str());
+        }
+
+        ImGui::Spacing();
+        bool need_pass = m_selected_profile >= 0 &&
+                         m_profiles[m_selected_profile].encrypted;
+        if (need_pass) {
+            ImGui::TextColored(Theme::secondary(), "PASSPHRASE");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputText("##loginpass", m_login_pass_buf, sizeof(m_login_pass_buf),
+                             ImGuiInputTextFlags_Password);
+        }
+
+        ImGui::BeginDisabled(m_selected_profile < 0);
+        if (ImGui::Button("  LOGIN  ", {ImGui::GetContentRegionAvail().x, 30}))
+            do_login(m_profiles[m_selected_profile].name,
+                     std::string(m_login_pass_buf));
+        ImGui::EndDisabled();
+    }
+
+    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
+    // ── NOWY PROFIL ──
+    ImGui::TextColored(Theme::secondary(), "NOWY PROFIL");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##newname", "nazwa [a-zA-Z0-9_-]",
+                             m_new_prof_name_buf, sizeof(m_new_prof_name_buf));
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##newpass1", "passphrase",
+                             m_new_prof_pass1_buf, sizeof(m_new_prof_pass1_buf),
+                             ImGuiInputTextFlags_Password);
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##newpass2", "powtorz passphrase",
+                             m_new_prof_pass2_buf, sizeof(m_new_prof_pass2_buf),
+                             ImGuiInputTextFlags_Password);
+
+    if (m_new_prof_pass1_buf[0] == '\0')
+        ImGui::TextColored(Theme::yellow(),
+            "(!) pusty passphrase = klucz na dysku BEZ ochrony");
+
+    if (ImGui::Button("  CREATE PROFILE  ", {ImGui::GetContentRegionAvail().x, 30}))
+        do_create_profile(std::string(m_new_prof_name_buf),
+                          std::string(m_new_prof_pass1_buf),
+                          std::string(m_new_prof_pass2_buf));
+
+    // ── KOMUNIKATY ──
+    if (!m_login_error.empty()) {
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 340.0f);
+        ImGui::TextColored(Theme::red(), "%s", m_login_error.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    if (!m_login_info.empty()) {
+        ImGui::Spacing();
+        ImGui::TextColored(Theme::green(), "%s", m_login_info.c_str());
+    }
+
+    ImGui::EndChild();
 }
 
 // ── SETUP PANEL ───────────────────────────────────────────────────
@@ -270,6 +391,38 @@ void ChatApp::render_handshake_panel(float width, float height) {
     }
     ImGui::EndChild();
     ImGui::Spacing();
+
+    // ── PEER TRUST (TOFU) ──
+    {
+        std::lock_guard lk(m_trust_mtx);
+        if (m_has_peer_trust) {
+            ImGui::TextColored(Theme::dim(), "PEER TRUST");
+            ImGui::Separator();
+
+            ImVec4 col = (m_peer_trust == TrustState::VERIFIED) ? Theme::green()
+                       : (m_peer_trust == TrustState::KNOWN)    ? Theme::blue_text()
+                                                                : Theme::yellow();
+            ImGui::TextColored(col, "%s", TrustStore::state_name(m_peer_trust));
+            ImGui::TextColored(Theme::dim(), "%s", m_peer_fp.c_str());
+
+            if (m_peer_trust == TrustState::UNVERIFIED)
+                ImGui::TextColored(Theme::yellow(),
+                    "Porownaj fingerprint z serwerem\nout-of-band, potem potwierdz:");
+
+            if (m_peer_trust != TrustState::VERIFIED) {
+                if (ImGui::Button("MARK AS VERIFIED", {width - 16.f, 24})) {
+                    try {
+                        TrustStore::mark_verified(m_peer_id);
+                        m_peer_trust = TrustState::VERIFIED;
+                        m_trust_list_dirty = true;
+                    } catch (const std::exception& e) {
+                        log(std::string("[TRUST] ") + e.what(), Theme::red(), m_current_room);
+                    }
+                }
+            }
+            ImGui::Spacing();
+        }
+    }
 
     // ── KONTROLA KLIENTA (PFS / TAMPER) ──
     if (m_mode == AppMode::CLIENT && m_connected) {
@@ -489,6 +642,71 @@ void ChatApp::render_benchmark_window() {
             }
         }
     }
+    ImGui::End();
+}
+
+// ── TRUSTED PEERS WINDOW (known_hosts) ────────────────────────────
+
+void ChatApp::render_trusted_window() {
+    ImGui::SetNextWindowSize({640, 360}, ImGuiCond_Once);
+    ImGui::Begin("Trusted Peers (known_hosts)", &m_show_trusted);
+
+    if (m_trust_list_dirty) {
+        try {
+            m_trust_list = TrustStore::list();
+        } catch (const std::exception& e) {
+            ImGui::TextColored(Theme::red(), "%s", e.what());
+            ImGui::End();
+            return;
+        }
+        m_trust_list_dirty = false;
+    }
+
+    ImGui::TextColored(Theme::dim(),
+        "TOFU: pierwszy kontakt zapisuje klucz peera. Zmiana klucza = blokada.\n"
+        "VERIFIED ustawiaj wylacznie po porownaniu fingerprintu out-of-band.");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (m_trust_list.empty()) {
+        ImGui::TextColored(Theme::dim(), "(brak zapamietanych peerow)");
+    } else if (ImGui::BeginTable("##trust", 4,
+                   ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+        ImGui::TableSetupColumn("Peer",        ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Fingerprint", ImGuiTableColumnFlags_WidthFixed, 200.f);
+        ImGui::TableSetupColumn("Status",      ImGuiTableColumnFlags_WidthFixed, 90.f);
+        ImGui::TableSetupColumn("",            ImGuiTableColumnFlags_WidthFixed, 130.f);
+        ImGui::TableHeadersRow();
+
+        for (const auto& e : m_trust_list) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextColored(Theme::primary(), "%s", e.peer_id.c_str());
+            ImGui::TextColored(Theme::dim(),     "%s", e.algo.c_str());
+
+            ImGui::TableNextColumn();
+            ImGui::TextColored(Theme::yellow(), "%s", e.fingerprint.c_str());
+
+            ImGui::TableNextColumn();
+            if (e.verified) ImGui::TextColored(Theme::green(),     "VERIFIED");
+            else            ImGui::TextColored(Theme::blue_text(), "KNOWN");
+
+            ImGui::TableNextColumn();
+            if (!e.verified) {
+                if (ImGui::Button(("Verify##" + e.peer_id).c_str())) {
+                    try { TrustStore::mark_verified(e.peer_id); } catch (...) {}
+                    m_trust_list_dirty = true;
+                }
+                ImGui::SameLine();
+            }
+            if (ImGui::Button(("Remove##" + e.peer_id).c_str())) {
+                try { TrustStore::remove(e.peer_id); } catch (...) {}
+                m_trust_list_dirty = true;
+            }
+        }
+        ImGui::EndTable();
+    }
+
     ImGui::End();
 }
 

@@ -8,6 +8,8 @@
 #include "../network/NetworkServer.h"
 #include "../network/NetworkClient.h"
 #include "../network/Socket.h"
+#include "../crypto/ProfileManager.h"
+#include "../crypto/TrustStore.h"
 #include <nlohmann/json.hpp>
 #include "../protocol/FileTransfer.h"
 
@@ -88,6 +90,33 @@ private:
     // ── TRYB ────────────────────────────────────────────────────
     AppMode     m_mode      = AppMode::NONE;
 
+    // ── PROFIL / LOGOWANIE ───────────────────────────────────────
+    bool        m_logged_in = false;
+    std::string m_profile_name;
+    std::string m_my_fingerprint;
+    bool        m_profile_encrypted = false;
+
+    std::vector<ProfileInfo> m_profiles;        // cache listy do UI
+    int         m_selected_profile = -1;
+    bool        m_profiles_dirty   = true;      // odśwież listę przy wejściu
+    char        m_login_pass_buf[256]{};
+    char        m_new_prof_name_buf[64]{};
+    char        m_new_prof_pass1_buf[256]{};
+    char        m_new_prof_pass2_buf[256]{};
+    std::string m_login_error;
+    std::string m_login_info;
+
+    // ── TOFU / ZAUFANIE PEERA ────────────────────────────────────
+    std::mutex  m_trust_mtx;
+    bool        m_has_peer_trust = false;   // czy klient ma aktywną ocenę peera
+    TrustState  m_peer_trust = TrustState::UNVERIFIED;
+    std::string m_peer_id;                  // "srv:host:port"
+    std::string m_peer_fp;
+
+    bool                    m_show_trusted = false;  // okno Trusted Peers
+    std::vector<TrustEntry> m_trust_list;
+    bool                    m_trust_list_dirty = true;
+
     // ── SESJA KLIENTA ────────────────────────────────────────────
     Bytes       m_session_key;
     std::mutex  m_session_mtx;
@@ -157,6 +186,7 @@ private:
 
 
     // ── RENDER ───────────────────────────────────────────────────
+    void render_login_panel();
     void render_setup_panel();
     void render_status_bar();
     void render_chat_panel(float width, float height);
@@ -164,9 +194,15 @@ private:
     void render_input_bar();
     void render_benchmark_window();
     void render_security_window();
+    void render_trusted_window();
     void render_rooms_sidebar(float width, float height);
 
     // ── LOGIKA ───────────────────────────────────────────────────
+    void do_login(const std::string& name, const std::string& passphrase);
+    void do_create_profile(const std::string& name,
+                           const std::string& pass1, const std::string& pass2);
+    void do_logout();
+    void cleanse_login_buffers();
     void start_server();
     void start_client();
     void send_chat_msg(const std::string& text);

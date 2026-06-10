@@ -73,7 +73,7 @@ ALICE                                          BOB
 |---|---|
 | Quantum-safe key exchange | Kyber-768 (ML-KEM, FIPS 203) |
 | Mutual authentication | Dilithium (ML-DSA, FIPS 204) |
-| MITM protection | Dilithium signatures on both sides |
+| MITM protection | Dilithium signatures + TOFU known_hosts (block on key change) |
 | Forward secrecy | New Kyber keypair per session |
 | Session encryption | AES-256-GCM |
 | Key derivation | HKDF-SHA256, salt = handshake transcript |
@@ -125,6 +125,14 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
 ```
 
+### Tests
+
+Requires Google Test (`pacman -S gtest` / `apt install libgtest-dev`):
+
+```bash
+cd build && ./quill_tests
+```
+
 ### Run
 
 Quill ships as a single ImGui application — each instance can host (server) or connect (client):
@@ -142,10 +150,12 @@ Start one instance in **Server** mode, then connect another in **Client** mode (
 ```
 quill/
 ├── src/
-│   ├── crypto/          # KyberKEM, DilithiumSign, AesGcm, SecurityLevel
+│   ├── crypto/          # CryptoManager, KyberKEM, DilithiumSign, AesGcm, Hkdf,
+│   │                    # Argon2, IdentityManager, ProfileManager, TrustStore
 │   ├── network/         # Socket, NetworkServer, NetworkClient (TCP, length-prefixed framing)
 │   ├── protocol/        # MessageFormat (JSON), FileTransfer (chunking + SHA-3)
 │   └── frontend/        # ImGui ChatApp, rendering, Theme
+├── tests/               # Google Test suite (81 tests), linked against quill_core
 ├── third_party/         # ImGui, portable-file-dialogs
 ├── main.cpp             # GLFW/OpenGL3 + ImGui entry point
 └── CMakeLists.txt
@@ -180,9 +190,8 @@ quill/
 
 ## Known limitations
 
-- **Key distribution** — Dilithium public keys must be exchanged out-of-band before first connection (TOFU or pre-shared config). There is no PKI or certificate authority — intentional for scope, documented as future work.
-- **Identity keys stored in plaintext** — persistent signature keys live in `~/.quill/identity` with `0600` permissions (OpenSSH-style checks on load), but are not encrypted at rest. Passphrase encryption is future work.
-- **No known_hosts yet** — identity is persistent and fingerprints are displayed, but peers are not yet remembered across sessions (TOFU in progress).
+- **No PKI** — trust is TOFU-based (like SSH/Signal): the first connection stores the peer key, fingerprints must be compared out-of-band to reach VERIFIED. There is no certificate authority — intentional for scope.
+- **Passphrase strength is the only offline defense** — identity keys are encrypted at rest with Argon2id + AES-256-GCM, but an attacker with the key file mounts an offline attack; there is deliberately no retry lockout (it would be security theater). Profiles with an empty passphrase store keys in plaintext (`0600`) and the UI warns about it.
 - **NAT traversal** — direct TCP, no STUN/TURN. Both peers must be reachable at a known address.
 
 ---
@@ -199,10 +208,11 @@ quill/
 - [x] Handshake visualizer with per-step timing, benchmarks, security dashboard
 - [x] File transfer (64KB chunks, AES-GCM per chunk, SHA-3-256 integrity)
 - [x] HKDF-SHA256 key derivation with handshake-transcript binding
-- [ ] Unified `CryptoManager` (refactor of crypto layer)
-- [x] Persistent identity keys (`~/.quill/identity`, 0600, self-test on load) + SHA-3 fingerprints
-- [ ] TOFU (known_hosts, UNVERIFIED/KNOWN/VERIFIED, block on key change)
-- [ ] Google Test unit tests (crypto, protocol, edge cases: corrupted chunk, key change, replay)
+- [x] Unified `CryptoManager` (handshake + TOFU + HKDF + identity, UI-free)
+- [x] Persistent identity keys (0600, self-test on load) + SHA-3 fingerprints
+- [x] Local profiles with login — at-rest key encryption (Argon2id + AES-256-GCM)
+- [x] TOFU (known_hosts per profile, UNVERIFIED/KNOWN/VERIFIED, fail-closed block on key change)
+- [x] Google Test suite — 81 tests (RFC vectors, tamper cases, TOFU attack scenarios, socketpair handshake integration)
 - [ ] File transfer: selective repeat retransmission, per-chunk SHA-3
 - [ ] NAT traversal (UDP hole punching + rendezvous server)
 - [ ] Engineering thesis: intelligent PQC algorithm selection

@@ -1,7 +1,7 @@
 {
   "project": "Quill - Post-Quantum Encrypted P2P Messenger",
   "status_date": "2026-06-10",
-  "version": "0.9.0-beta",
+  "version": "1.0.0-rc1",
   "current_state": {
     "done": [
       "Obiektowa warstwa sieciowa (Socket, NetworkServer, NetworkClient)",
@@ -21,23 +21,26 @@
       "UI transferu plików: wybór pliku (portable-file-dialogs), paski postępu, katalog pobrań",
       "HKDF-SHA256 (Hkdf.h/.cpp, OpenSSL EVP_KDF): klucz sesji wiązany z transkryptem handshake'u (salt = kyber_pub||ct), separacja domen (info = wersja protokołu + poziom), czyszczenie surowego sekretu (OPENSSL_cleanse), zweryfikowane wektorem RFC 5869",
       "Identity management (IdentityManager.h/.cpp): trwałe klucze ML-DSA/Falcon w ~/.quill/identity (lub $QUILL_IDENTITY_DIR), chmod 0600/0700, zapis atomowy (tmp+rename), odmowa wczytania przy zbyt szerokich uprawnieniach (jak OpenSSH), self-test sign/verify po wczytaniu (uszkodzony klucz = wyjątek, nie cicha regeneracja)",
-      "Fingerprint tożsamości: SHA-3-256 klucza publicznego, 96 bitów, format A3F2-9C1B-44DE-F021-8B3C-7A09; logowany w UI po obu stronach handshake'u"
+      "Fingerprint tożsamości: SHA-3-256 klucza publicznego, 96 bitów, format A3F2-9C1B-44DE-F021-8B3C-7A09; logowany w UI po obu stronach handshake'u",
+      "Profile + logowanie: ProfileManager (~/.quill/profiles/<name>/ lub $QUILL_PROFILES_DIR), profile.json z jawnym fingerprintem, walidacja nazwy whitelistą (ochrona przed path traversal)",
+      "Szyfrowanie kluczy at rest: format QID2 = Argon2id (EVP_KDF, RFC 9106: t=3, m=64MiB, parametry zapisane w pliku) + AES-256-GCM; złe hasło = GCM tag fail (jeden komunikat dla złego hasła i manipulacji); migracja QID1->QID2 w miejscu; pusty passphrase = QID1 plaintext z ostrzeżeniem w UI",
+      "Ekran logowania ImGui: lista profili, tworzenie (passphrase x2), fingerprint w status barze i menu Profile, logout (zablokowany w trakcie sesji - klucze potrzebne do PFS), cleanse buforów haseł i kluczy przy wylogowaniu/zamknięciu",
+      "TOFU (TrustStore.h/.cpp): known_hosts w katalogu profilu (JSON, 0600, zapis atomowy), stany UNVERIFIED/KNOWN/VERIFIED/MISMATCH, porównanie pełnym SHA-3-256 (nie skróconym fingerprintem), klient identyfikuje serwer po srv:host:port, serwer rozpoznaje klientów po kluczu (cli:fingerprint)",
+      "TOFU fail-closed: zmiana klucza serwera = blokada połączenia PRZED enkapsulacją KEM, wpis w known_hosts nietknięty (nadpisanie tylko przez świadome Remove), uszkodzony known_hosts = twardy błąd zamiast cichego nadpisania",
+      "TOFU UI: sekcja PEER TRUST w panelu handshake (stan + MARK AS VERIFIED), okno Tools > Trusted Peers (lista, Verify, Remove), alert MITM z oboma fingerprintami w logu",
+      "CryptoManager: cały PQC handshake (klient+serwer), TOFU, HKDF i tożsamość w jednej warstwie bez zależności od UI; ChatApp::do_*_handshake to cienkie wrappery (logi+visualizer); TofuMismatchError z fingerprintami expected/received; inwarianty (verify przed encaps/decaps, fail-closed TOFU, cleanse) egzekwowane w warstwie krypto",
+      "Testy Google Test (tests/, 81 testów): Hkdf (wektory RFC 5869), Argon2, AesGcm (tamper/wrong key/nonce), KyberKEM i DilithiumSign (wszystkie poziomy), IdentityManager (QID1/QID2, złe hasło, migracja, uprawnienia, korupcja), ProfileManager (path traversal), TrustStore (pełny cykl TOFU + atak), MessageFormat, FileTransfer (uszkodzony/zgubiony chunk, zły hash), CryptoManager (integracyjny handshake przez socketpair, MITM blocked, tampered ciphertext)",
+      "Wzmocnienie QID1: suma SHA-3-256 payloadu w pliku (deterministyczna detekcja korupcji; sam self-test sign/verify nie łapał każdego przekłamania bajtu w ML-DSA sk)",
+      "Bugfix MessageFormat: json::binary nie przeżywa dump()/parse() (tekstowy JSON nie ma typu binarnego) - nonce/payload serializowane teraz jako tablice; bug wykryty przez nowe testy"
     ],
     "in_progress": [
-      "Refaktoryzacja warstwy krypto do ujednoliconego CryptoManager (CryptoManager.h/.cpp to nadal pusty szkielet)",
       "Oczyszczanie martwych połączeń (częściowo obsługiwane przez try-catch w serwerze)"
     ],
-    "declared_in_presentation_but_missing_in_code": [
-      "TOFU: known_hosts, stany UNVERIFIED/KNOWN/VERIFIED, blokada przy zmianie klucza serwera (fingerprint już jest)",
-      "CryptoManager refactor: slajd mówi 'logika przeniesiona z ChatApp', klasa jest pusta",
-      "Testy Google Test: slajd deklaruje częściowe pokrycie KEM/DSA/AES-GCM, brak katalogu tests/"
-    ],
     "todo": [
-      "Profile + logowanie (ZAPLANOWANE, przed TOFU): ProfileManager (~/.quill/profiles/<name>/), szyfrowanie kluczy at rest (format QID2: Argon2id via EVP_KDF + AES-256-GCM, złe hasło = GCM tag fail, bez lockoutu), pusty passphrase dozwolony z ostrzeżeniem w UI, ekran logowania ImGui przed setup panelem, migracja QID1->QID2, wylogowanie = OPENSSL_cleanse",
-      "TOFU + weryfikacja fingerprint (model jak Signal: known_hosts W KATALOGU PROFILU, UNVERIFIED/KNOWN/VERIFIED, alert + blokada przy zmianie klucza)",
-      "Testy jednostkowe Google Test: krypto (KyberKEM, DilithiumSign, AesGcm), protokół (MessageFormat, FileTransfer), edge cases (uszkodzony chunk, zmiana klucza, replay attack)",
+      "Testy: replay attack na poziomie protokołu wiadomości (brak licznika/sekwencji w wiadomościach CHAT - do przemyślenia)",
       "File transfer - ulepszenia: selective repeat (retransmisja brakujących chunków po chunk_index), SHA-3 per chunk dla wczesnej detekcji",
-      "NAT Traversal: UDP hole punching z serwerem rendezvous (serwer widzi tylko IP:port, nie treść)"
+      "NAT Traversal: UDP hole punching z serwerem rendezvous (serwer widzi tylko IP:port, nie treść)",
+      "Szyfrowanie identity passphrase'em: rozważyć wymuszenie (obecnie pusty passphrase dozwolony)"
     ]
   },
   "technical_stack": {
@@ -56,7 +59,7 @@
   },
   "critical_notes_for_ai": {
     "compilation": "Wymaga linkowania OpenSSL, liboqs oraz nlohmann_json, GLFW, OpenGL3. Threading z pthread.",
-    "security": "PFS (rotacja kluczy) przebiega bez przerywania połączenia TCP (nowy PQC Handshake na żądanie). Klucz sesji przez HKDF-SHA256 z wiązaniem transkryptu - nigdy surowy shared_secret. Klucze DSA trwałe (IdentityManager), Kyber zawsze efemeryczny. UWAGA: klucz tajny na dysku nieszyfrowany (0600) - known limitation. Do testów dwóch instancji na jednej maszynie ustaw rożne $QUILL_IDENTITY_DIR.",
+    "security": "PFS (rotacja kluczy) przebiega bez przerywania połączenia TCP (nowy PQC Handshake na żądanie). Klucz sesji przez HKDF-SHA256 z wiązaniem transkryptu - nigdy surowy shared_secret. Klucze DSA trwałe (profil + passphrase, Argon2id+AES-GCM at rest), Kyber zawsze efemeryczny. Logowanie = lokalne odblokowanie tożsamości, NIE uwierzytelnienie wobec sieci. Do testów dwóch instancji na jednej maszynie wystarczą dwa profile.",
     "levels": "FAST (Kyber512+Falcon512), BALANCED (Kyber768+MLDSA65), MAX (Kyber1024+MLDSA87)."
   }
 }

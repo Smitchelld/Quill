@@ -1,7 +1,6 @@
 #include "ChatApp.h"
 #include "Theme.h"
-#include "../crypto/Hkdf.h"
-#include "../crypto/IdentityManager.h"
+#include "../crypto/CryptoManager.h"
 #include <openssl/crypto.h>
 #include <sstream>
 #include <iomanip>
@@ -26,9 +25,91 @@ ChatApp::~ChatApp() {
     if (m_client) m_client->close_socket();
     if (m_server) m_server->close_socket();
 
-    std::lock_guard lk(m_clients_mtx);
-    for (auto& c : m_clients)
-        if (c.sock) c.sock->close_socket();
+    {
+        std::lock_guard lk(m_clients_mtx);
+        for (auto& c : m_clients)
+            if (c.sock) c.sock->close_socket();
+    }
+
+    // Higiena pamięci przy zamknięciu: cleanse kluczy i passphrase'a
+    ProfileManager::logout();
+    cleanse_login_buffers();
+}
+
+// ── PROFIL / LOGOWANIE ────────────────────────────────────────────
+
+void ChatApp::cleanse_login_buffers() {
+    OPENSSL_cleanse(m_login_pass_buf,     sizeof(m_login_pass_buf));
+    OPENSSL_cleanse(m_new_prof_pass1_buf, sizeof(m_new_prof_pass1_buf));
+    OPENSSL_cleanse(m_new_prof_pass2_buf, sizeof(m_new_prof_pass2_buf));
+}
+
+void ChatApp::do_login(const std::string& name, const std::string& passphrase) {
+    try {
+        ProfileInfo info = ProfileManager::unlock(name, passphrase);
+        m_logged_in         = true;
+        m_profile_name      = info.name;
+        m_my_fingerprint    = info.fingerprint;
+        m_profile_encrypted = info.encrypted;
+        m_login_error.clear();
+        m_login_info.clear();
+        cleanse_login_buffers();
+        log("Zalogowano jako '" + info.name + "' | fingerprint: " + info.fingerprint,
+            Theme::green());
+        if (!info.encrypted)
+            log("UWAGA: klucz tozsamosci NIE jest chroniony passphrase'em",
+                Theme::yellow());
+    } catch (const std::exception& e) {
+        m_login_error = e.what();
+    }
+}
+
+void ChatApp::do_create_profile(const std::string& name,
+                                const std::string& pass1, const std::string& pass2) {
+    if (pass1 != pass2) {
+        m_login_error = "Passphrase'y nie sa identyczne";
+        return;
+    }
+    try {
+        ProfileInfo info = ProfileManager::create(name, pass1);
+        m_logged_in         = true;
+        m_profile_name      = info.name;
+        m_my_fingerprint    = info.fingerprint;
+        m_profile_encrypted = info.encrypted;
+        m_login_error.clear();
+        m_login_info.clear();
+        m_profiles_dirty = true;
+        cleanse_login_buffers();
+        log("Utworzono profil '" + info.name + "' | fingerprint: " + info.fingerprint,
+            Theme::green());
+        log("Przekaz swoj fingerprint rozmowcom kanalem zaufanym (out-of-band)",
+            Theme::secondary());
+        if (!info.encrypted)
+            log("UWAGA: profil bez passphrase'a — klucz lezy na dysku plaintextem",
+                Theme::yellow());
+    } catch (const std::exception& e) {
+        m_login_error = e.what();
+    }
+}
+
+void ChatApp::do_logout() {
+    // Wylogowanie tylko gdy nie ma aktywnej sesji sieciowej —
+    // klucze sa potrzebne do rotacji PFS w trakcie polaczenia
+    if (m_mode != AppMode::NONE) return;
+    ProfileManager::logout();
+    m_logged_in = false;
+    m_profile_name.clear();
+    m_my_fingerprint.clear();
+    m_profiles_dirty = true;
+    m_selected_profile = -1;
+    {
+        std::lock_guard lk(m_trust_mtx);
+        m_has_peer_trust = false;
+        m_peer_id.clear();
+        m_peer_fp.clear();
+    }
+    m_trust_list_dirty = true;
+    cleanse_login_buffers();
 }
 
 // ── HELPERY ───────────────────────────────────────────────────────
@@ -75,119 +156,61 @@ void ChatApp::broadcast_raw_to_room(const std::string& room,
     }
 }
 
-// ── HANDSHAKE ──────────────
+// ── HANDSHAKE (cienkie wrappery — cała kryptografia w CryptoManager) ──
 
 Bytes ChatApp::do_client_handshake(Socket& sock, const std::string& level) {
     hs_clear();
     log("=== HANDSHAKE START (CLIENT) | " + level + " ===", Theme::yellow(), m_current_room);
 
-    KyberKEM      kem(level);
-    DilithiumSign signer(level);
+    std::string peer_id = "srv:" + std::string(m_host_buf) + ":" + std::to_string(m_port);
+    CryptoManager cm(level);
 
-    auto data = sock.receive_bytes();
-    auto j    = json::parse(data.begin(), data.end());
+    HandshakeResult res;
+    try {
+        res = cm.client_handshake(sock, peer_id,
+            [this](const std::string& label, double t) { hs_step(label, t); });
+    } catch (const TofuMismatchError& e) {
+        log("!!! SERVER KEY CHANGED — POSSIBLE MITM !!!", Theme::red(), m_current_room);
+        log("  expected: " + e.expected_fp, Theme::red(), m_current_room);
+        log("  received: " + e.received_fp, Theme::red(), m_current_room);
+        log("  Jesli zmiana jest oczekiwana: Tools > Trusted Peers > Remove, polacz ponownie.",
+            Theme::yellow(), m_current_room);
+        throw;
+    }
 
-    // Pobieramy jako Bytes (std::vector<uint8_t>) - to naprawia błąd 302
-    Bytes srv_sig_pub   = j["sig_pub"].get<Bytes>();
-    Bytes srv_kyber_pub = j["kyber_pub"].get<Bytes>();
-    Bytes srv_sig       = j["sig"].get<Bytes>();
+    {
+        std::lock_guard lk(m_trust_mtx);
+        m_has_peer_trust = true;
+        m_peer_trust     = res.peer_trust;
+        m_peer_id        = peer_id;
+        m_peer_fp        = res.peer_fingerprint;
+    }
+    m_trust_list_dirty = true;
 
-    auto t0 = clk::now();
-    if (!signer.verify(srv_kyber_pub, srv_sig, srv_sig_pub))
-        throw std::runtime_error("Server Identity Verification FAILED!");
-    auto t1 = clk::now();
-    hs_step("Server Signature Verified (ML-DSA)", ms(t0, t1));
-    log("Server fingerprint: " + IdentityManager::fingerprint(srv_sig_pub),
-        Theme::yellow(), m_current_room);
+    log("Server fingerprint: " + res.peer_fingerprint +
+        "  [" + TrustStore::state_name(res.peer_trust) + "]",
+        res.peer_trust == TrustState::VERIFIED ? Theme::green() : Theme::yellow(),
+        m_current_room);
+    if (res.peer_trust == TrustState::UNVERIFIED)
+        log("Pierwszy kontakt z tym serwerem — porownaj fingerprint out-of-band "
+            "i oznacz VERIFIED.", Theme::yellow(), m_current_room);
 
-    auto t2 = clk::now();
-    auto [ct, ss] = kem.encapsulate(srv_kyber_pub);
-    auto t3 = clk::now();
-    hs_step("KEM Encapsulation (ML-KEM)", ms(t2, t3));
-
-    // Trwała tożsamość: klucz ładowany z dysku (generowany tylko raz)
-    auto t4        = clk::now();
-    auto my_sig_kp = IdentityManager::load_or_generate(level);
-    auto my_sig    = signer.sign(ct, my_sig_kp.secret_key);
-    auto t5        = clk::now();
-    hs_step("Identity Loaded + Ciphertext Signed (ML-DSA)", ms(t4, t5));
-
-    json res;
-    res["type"]       = "CLI_KEX";
-    res["sig_pub"]    = my_sig_kp.public_key; // JSON obsłuży wektor automatycznie
-    res["ciphertext"] = ct;
-    res["sig"]        = my_sig;
-    res["room"]       = m_current_room;
-
-    std::string s = res.dump();
-    sock.send_bytes(Bytes(s.begin(), s.end()));
-
-    // KDF: klucz sesji = HKDF-SHA256(shared_secret), salt = transkrypt handshake'u
-    auto t6 = clk::now();
-    Bytes transcript = srv_kyber_pub;
-    transcript.insert(transcript.end(), ct.begin(), ct.end());
-    Bytes key = Hkdf::derive(ss, transcript, Hkdf::session_info(level));
-    OPENSSL_cleanse(ss.data(), ss.size()); // surowy sekret nie jest już potrzebny
-    auto t7 = clk::now();
-    hs_step("Session Key Derived (HKDF-SHA256)", ms(t6, t7));
-
-    m_hs_total_ms = ms(t0, t7);
-    return key;
+    m_hs_total_ms = res.total_ms;
+    return res.session_key;
 }
 
 Bytes ChatApp::do_server_handshake(Socket& sock, const std::string& level) {
-    KyberKEM      kem(level);
-    DilithiumSign signer(level);
+    CryptoManager cm(level);
+    HandshakeResult res = cm.server_handshake(sock,
+        [this](const std::string& label, double t) { hs_step(label, t); });
 
-    // Kyber: efemeryczny per sesja (PFS). DSA: trwała tożsamość z dysku.
-    auto t0       = clk::now();
-    auto kyber_kp = kem.generate_keypair();
-    auto sig_kp   = IdentityManager::load_or_generate(level);
-    auto t1       = clk::now();
-    hs_step("Keygen (ML-KEM) + Identity Load (ML-DSA)", ms(t0, t1));
+    m_trust_list_dirty = true;
+    log("Client fingerprint: " + res.peer_fingerprint +
+        "  [" + TrustStore::state_name(res.peer_trust) + "]",
+        res.peer_trust == TrustState::VERIFIED ? Theme::green() : Theme::yellow());
 
-    auto srv_sig = signer.sign(kyber_kp.public_key, sig_kp.secret_key);
-
-    json hello;
-    hello["type"]      = "SRV_HELLO";
-    hello["sig_pub"]   = sig_kp.public_key;
-    hello["kyber_pub"] = kyber_kp.public_key;
-    hello["sig"]       = srv_sig;
-
-    std::string s = hello.dump();
-    sock.send_bytes(Bytes(s.begin(), s.end()));
-
-    auto data = sock.receive_bytes();
-    auto j    = json::parse(data.begin(), data.end());
-
-    Bytes cli_sig_pub = j["sig_pub"].get<Bytes>();
-    Bytes ct          = j["ciphertext"].get<Bytes>();
-    Bytes cli_sig     = j["sig"].get<Bytes>();
-
-    auto t4 = clk::now();
-    if (!signer.verify(ct, cli_sig, cli_sig_pub))
-        throw std::runtime_error("Client Identity Verification FAILED!");
-    auto t5 = clk::now();
-    hs_step("Client Signature Verified (ML-DSA)", ms(t4, t5));
-    log("Client fingerprint: " + IdentityManager::fingerprint(cli_sig_pub),
-        Theme::yellow());
-
-    auto t6 = clk::now();
-    auto ss = kem.decapsulate(ct, kyber_kp.secret_key);
-    auto t7 = clk::now();
-    hs_step("KEM Decapsulation (ML-KEM)", ms(t6, t7));
-
-    // KDF: identyczny transkrypt po obu stronach → identyczny klucz sesji
-    auto t8 = clk::now();
-    Bytes transcript = kyber_kp.public_key;
-    transcript.insert(transcript.end(), ct.begin(), ct.end());
-    Bytes key = Hkdf::derive(ss, transcript, Hkdf::session_info(level));
-    OPENSSL_cleanse(ss.data(), ss.size()); // surowy sekret nie jest już potrzebny
-    auto t9 = clk::now();
-    hs_step("Session Key Derived (HKDF-SHA256)", ms(t8, t9));
-
-    m_hs_total_ms = ms(t0, t9);
-    return key;
+    m_hs_total_ms = res.total_ms;
+    return res.session_key;
 }
 
 // ── POKOJE ────────────────────────────────────────────────────────

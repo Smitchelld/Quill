@@ -10,8 +10,7 @@ find_package(nlohmann_json REQUIRED)
 find_library(OQS_LIB oqs REQUIRED)
 find_path(OQS_INCLUDE oqs/oqs.h REQUIRED)
 
-
-# ── IMGUI (submoduł: third_party/imgui) ───────────────────────────
+# ── IMGUI (third_party/imgui) ─────────────────────────────────────
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
 add_library(imgui STATIC
         ${IMGUI_DIR}/imgui.cpp
@@ -27,48 +26,59 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 
-# ── GŁÓWNY BINARY ─────────────────────────────────────────────────
-add_executable(Quill
-        main.cpp
-        src/network/network.h
+# ── QUILL CORE (krypto + sieć + protokół, bez UI — testowalne) ────
+add_library(quill_core STATIC
         src/crypto/KyberKEM.cpp
-        src/crypto/KyberKEM.h
         src/crypto/DilithiumSign.cpp
-        src/crypto/DilithiumSign.h
         src/crypto/AesGcm.cpp
-        src/crypto/AesGcm.h
         src/crypto/Hkdf.cpp
-        src/crypto/Hkdf.h
+        src/crypto/Argon2.cpp
         src/crypto/IdentityManager.cpp
-        src/crypto/IdentityManager.h
+        src/crypto/ProfileManager.cpp
+        src/crypto/TrustStore.cpp
         src/crypto/CryptoManager.cpp
-        src/crypto/CryptoManager.h
         src/network/Socket.cpp
-        src/network/Socket.h
         src/network/NetworkServer.cpp
-        src/network/NetworkServer.h
         src/network/NetworkClient.cpp
-        src/network/NetworkClient.h
         src/protocol/MessageFormat.cpp
-        src/protocol/MessageFormat.h
-        src/frontend/ChatApp.cpp
-        src/frontend/ChatApp.h
-        src/frontend/Theme.h
-        src/frontend/ChatAppRender.cpp
         src/protocol/FileTransfer.cpp
-        src/protocol/FileTransfer.h
-
 )
-
-target_include_directories(Quill PRIVATE
+target_include_directories(quill_core PUBLIC
         ${OQS_INCLUDE}
-        ${IMGUI_DIR}
-        ${IMGUI_DIR}/backends
+        ${CMAKE_SOURCE_DIR}/src
 )
-
-target_link_libraries(Quill PRIVATE
-        imgui
+target_link_libraries(quill_core PUBLIC
         ${OQS_LIB}
         OpenSSL::Crypto
         nlohmann_json::nlohmann_json
 )
+
+# ── GŁÓWNY BINARY ─────────────────────────────────────────────────
+add_executable(Quill
+        main.cpp
+        src/frontend/ChatApp.cpp
+        src/frontend/ChatAppRender.cpp
+)
+target_link_libraries(Quill PRIVATE quill_core imgui)
+
+# ── TESTY (Google Test) ───────────────────────────────────────────
+enable_testing()
+find_package(GTest)
+if (GTest_FOUND)
+    add_executable(quill_tests
+            tests/test_hkdf.cpp
+            tests/test_argon2.cpp
+            tests/test_aesgcm.cpp
+            tests/test_kyber.cpp
+            tests/test_dilithium.cpp
+            tests/test_identity.cpp
+            tests/test_profile.cpp
+            tests/test_truststore.cpp
+            tests/test_messageformat.cpp
+            tests/test_filetransfer.cpp
+            tests/test_cryptomanager.cpp
+    )
+    target_link_libraries(quill_tests PRIVATE quill_core GTest::gtest GTest::gtest_main)
+    include(GoogleTest)
+    gtest_discover_tests(quill_tests)
+endif()
