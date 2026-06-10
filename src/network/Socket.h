@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <optional>
 #include <unistd.h>
 
 using Bytes = std::vector<uint8_t>;
@@ -19,6 +20,8 @@ public:
 
     void send_bytes(const Bytes& data) const;
     Bytes receive_bytes() const;
+    // Odczyt z limitem czasu; std::nullopt = timeout (brak danych).
+    std::optional<Bytes> try_receive_bytes(int timeout_ms) const;
 
 protected:
     int m_fd;

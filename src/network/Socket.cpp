@@ -1,6 +1,7 @@
 #include "Socket.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <stdexcept>
 
 void Socket::close_socket() {
@@ -39,4 +40,12 @@ Bytes Socket::receive_bytes() const {
     Bytes data(len);
     if (len > 0) recv_all(m_fd, data.data(), len);
     return data;
+}
+
+std::optional<Bytes> Socket::try_receive_bytes(int timeout_ms) const {
+    pollfd pfd{m_fd, POLLIN, 0};
+    int r = poll(&pfd, 1, timeout_ms);
+    if (r == 0) return std::nullopt;
+    if (r < 0)  throw std::runtime_error("Socket poll error");
+    return receive_bytes();
 }

@@ -3,9 +3,20 @@
 #include <stdexcept>
 #include <memory>
 
+// Dodaje AAD do kontekstu GCM (przed danymi). Wspólne dla enc/dec.
+static void feed_aad(EVP_CIPHER_CTX* ctx, const Bytes& aad, bool encrypt) {
+    if (aad.empty()) return;
+    int len = 0;
+    if (encrypt)
+        EVP_EncryptUpdate(ctx, nullptr, &len, aad.data(), (int)aad.size());
+    else
+        EVP_DecryptUpdate(ctx, nullptr, &len, aad.data(), (int)aad.size());
+}
+
 // ── WERSJE DLA TEKSTU (Czat) ─────────────────────────────────────────────────
 
-EncryptedData AesGcm::encrypt(const Bytes& key, const std::string& plaintext) {
+EncryptedData AesGcm::encrypt(const Bytes& key, const std::string& plaintext,
+                              const Bytes& aad) {
     if (key.size() != 32) throw std::invalid_argument("AES-256 wymaga klucza 32-bajtowego");
 
     EncryptedData result;
@@ -18,6 +29,7 @@ EncryptedData AesGcm::encrypt(const Bytes& key, const std::string& plaintext) {
     EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
     EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, IV_LEN, nullptr);
     EVP_EncryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), result.nonce.data());
+    feed_aad(ctx.get(), aad, true);
 
     Bytes temp_ct(plaintext.size());
     int len = 0, total_len = 0;
@@ -38,7 +50,8 @@ EncryptedData AesGcm::encrypt(const Bytes& key, const std::string& plaintext) {
     return result;
 }
 
-std::string AesGcm::decrypt(const Bytes& key, const Bytes& nonce, const Bytes& ciphertext) {
+std::string AesGcm::decrypt(const Bytes& key, const Bytes& nonce,
+                            const Bytes& ciphertext, const Bytes& aad) {
     if (key.size() != 32) throw std::invalid_argument("Błędny rozmiar klucza AES");
     if (nonce.size() != IV_LEN) throw std::invalid_argument("Błędny rozmiar Nonce (wymagane 12B)");
     if (ciphertext.size() < TAG_LEN) throw std::runtime_error("Dane zaszyfrowane są za krótkie (brak TAGa)");
@@ -52,6 +65,7 @@ std::string AesGcm::decrypt(const Bytes& key, const Bytes& nonce, const Bytes& c
     EVP_DecryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
     EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, IV_LEN, nullptr);
     EVP_DecryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), nonce.data());
+    feed_aad(ctx.get(), aad, false);
 
     Bytes plaintext(ct_len);
     int len = 0;
@@ -70,7 +84,8 @@ std::string AesGcm::decrypt(const Bytes& key, const Bytes& nonce, const Bytes& c
 
 // ── WERSJE DLA BAJTÓW BINARNYCH (Transfer Plików) ────────────────────────────
 
-EncryptedData AesGcm::encrypt(const Bytes& key, const Bytes& plaintext_bytes) {
+EncryptedData AesGcm::encrypt(const Bytes& key, const Bytes& plaintext_bytes,
+                              const Bytes& aad) {
     if (key.size() != 32) throw std::invalid_argument("AES-256 wymaga klucza 32-bajtowego");
 
     EncryptedData result;
@@ -83,6 +98,7 @@ EncryptedData AesGcm::encrypt(const Bytes& key, const Bytes& plaintext_bytes) {
     EVP_EncryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
     EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, IV_LEN, nullptr);
     EVP_EncryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), result.nonce.data());
+    feed_aad(ctx.get(), aad, true);
 
     Bytes temp_ct(plaintext_bytes.size());
     int len = 0, total_len = 0;
@@ -104,7 +120,8 @@ EncryptedData AesGcm::encrypt(const Bytes& key, const Bytes& plaintext_bytes) {
     return result;
 }
 
-Bytes AesGcm::decrypt_bytes(const Bytes& key, const Bytes& nonce, const Bytes& ciphertext) {
+Bytes AesGcm::decrypt_bytes(const Bytes& key, const Bytes& nonce,
+                            const Bytes& ciphertext, const Bytes& aad) {
     if (key.size() != 32) throw std::invalid_argument("Błędny rozmiar klucza AES");
     if (nonce.size() != IV_LEN) throw std::invalid_argument("Błędny rozmiar Nonce (wymagane 12B)");
     if (ciphertext.size() < TAG_LEN) throw std::runtime_error("Dane zaszyfrowane są za krótkie (brak TAGa)");
@@ -118,6 +135,7 @@ Bytes AesGcm::decrypt_bytes(const Bytes& key, const Bytes& nonce, const Bytes& c
     EVP_DecryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr);
     EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, IV_LEN, nullptr);
     EVP_DecryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), nonce.data());
+    feed_aad(ctx.get(), aad, false);
 
     Bytes plaintext(ct_len);
     int len = 0;

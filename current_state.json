@@ -1,7 +1,7 @@
 {
   "project": "Quill - Post-Quantum Encrypted P2P Messenger",
   "status_date": "2026-06-10",
-  "version": "1.0.0-rc1",
+  "version": "1.0.0-rc2",
   "current_state": {
     "done": [
       "Obiektowa warstwa sieciowa (Socket, NetworkServer, NetworkClient)",
@@ -29,18 +29,70 @@
       "TOFU fail-closed: zmiana klucza serwera = blokada połączenia PRZED enkapsulacją KEM, wpis w known_hosts nietknięty (nadpisanie tylko przez świadome Remove), uszkodzony known_hosts = twardy błąd zamiast cichego nadpisania",
       "TOFU UI: sekcja PEER TRUST w panelu handshake (stan + MARK AS VERIFIED), okno Tools > Trusted Peers (lista, Verify, Remove), alert MITM z oboma fingerprintami w logu",
       "CryptoManager: cały PQC handshake (klient+serwer), TOFU, HKDF i tożsamość w jednej warstwie bez zależności od UI; ChatApp::do_*_handshake to cienkie wrappery (logi+visualizer); TofuMismatchError z fingerprintami expected/received; inwarianty (verify przed encaps/decaps, fail-closed TOFU, cleanse) egzekwowane w warstwie krypto",
-      "Testy Google Test (tests/, 81 testów): Hkdf (wektory RFC 5869), Argon2, AesGcm (tamper/wrong key/nonce), KyberKEM i DilithiumSign (wszystkie poziomy), IdentityManager (QID1/QID2, złe hasło, migracja, uprawnienia, korupcja), ProfileManager (path traversal), TrustStore (pełny cykl TOFU + atak), MessageFormat, FileTransfer (uszkodzony/zgubiony chunk, zły hash), CryptoManager (integracyjny handshake przez socketpair, MITM blocked, tampered ciphertext)",
+      "Ochrona przed replay + AAD: AES-256-GCM przyjmuje teraz AAD (opcjonalny, domyślnie pusty = zgodność wsteczna). Wiadomości CHAT mają monotoniczny numer sekwencji per kierunek (klient: m_send_seq/m_recv_seq; serwer: send_seq/recv_seq w ConnectedClient) wiązany przez AAD='CHAT|<seq>'. Odbiorca odrzuca seq<=ostatni (fail-closed); podmiana seq w JSON psuje tag GCM. Liczniki resetowane przy każdym handshake/rotacji PFS (stary szyfrogram i tak nie deszyfruje się nowym kluczem).",
+      "Testy Google Test (tests/, 87 testów): Hkdf (wektory RFC 5869), Argon2, AesGcm (tamper/wrong key/nonce + AAD: roundtrip, zły/brakujący/niespodziewany AAD, wiązanie seq jako anty-replay), KyberKEM i DilithiumSign (wszystkie poziomy), IdentityManager (QID1/QID2, złe hasło, migracja, uprawnienia, korupcja), ProfileManager (path traversal), TrustStore (pełny cykl TOFU + atak), MessageFormat, FileTransfer (uszkodzony/zgubiony chunk, zły hash), CryptoManager (integracyjny handshake przez socketpair, MITM blocked, tampered ciphertext)",
       "Wzmocnienie QID1: suma SHA-3-256 payloadu w pliku (deterministyczna detekcja korupcji; sam self-test sign/verify nie łapał każdego przekłamania bajtu w ML-DSA sk)",
-      "Bugfix MessageFormat: json::binary nie przeżywa dump()/parse() (tekstowy JSON nie ma typu binarnego) - nonce/payload serializowane teraz jako tablice; bug wykryty przez nowe testy"
+      "Bugfix MessageFormat: json::binary nie przeżywa dump()/parse() (tekstowy JSON nie ma typu binarnego) - nonce/payload serializowane teraz jako tablice; bug wykryty przez nowe testy",
+      "Sprzątanie martwych połączeń: po rozłączeniu klient usuwany z m_clients i m_rooms (server_client_handler cleanup)",
+      "Fix auto-rotacji PFS w trybie serwera: usunięto błędne m_client->send_bytes (null deref). Rotacja serwerowa przez pending_pfs_rotation + perform_pfs_rotation w wątku handlera klienta; Socket::try_receive_bytes(500ms) pozwala obsłużyć kolejkę bez czekania na wiadomość od klienta"
     ],
-    "in_progress": [
-      "Oczyszczanie martwych połączeń (częściowo obsługiwane przez try-catch w serwerze)"
-    ],
+    "in_progress": [],
     "todo": [
-      "Testy: replay attack na poziomie protokołu wiadomości (brak licznika/sekwencji w wiadomościach CHAT - do przemyślenia)",
+      "Replay dla transferu plików: dodać AAD='FILE|tid|chunk_index' do FILE_CHUNK (obecnie chunki chronione dedupe po chunk_index + SHA-3-256 całości; wiązanie kontekstu byłoby dodatkowym wzmocnieniem)",
       "File transfer - ulepszenia: selective repeat (retransmisja brakujących chunków po chunk_index), SHA-3 per chunk dla wczesnej detekcji",
       "NAT Traversal: UDP hole punching z serwerem rendezvous (serwer widzi tylko IP:port, nie treść)",
       "Szyfrowanie identity passphrase'em: rozważyć wymuszenie (obecnie pusty passphrase dozwolony)"
+    ]
+  },
+  "known_issues": {
+    "_comment": "Jawna lista znanych dziur/długu na 2026-06-10 (po naprawie replay). Waga: high/med/low.",
+    "security": [
+      {
+        "id": "sec-relay-not-e2e",
+        "severity": "med",
+        "title": "Serwer widzi plaintext (hub-and-spoke, nie E2E)",
+        "detail": "Serwer odszyfrowuje wiadomość od nadawcy i re-szyfruje ją osobno dla każdego odbiorcy (broadcast_to_room). Każdy hop to AES-256-GCM, ale serwer ma dostęp do treści. To świadoma decyzja architektoniczna, nie bug. Prawdziwy E2E wymagałby osobnej zgody na klucz per para odbiorców.",
+        "fix": "Redesign: per-recipient key agreement / podwójny ratchet; duży zakres."
+      },
+      {
+        "id": "sec-file-replay-aad",
+        "severity": "med",
+        "title": "Brak AAD w chunkach plików",
+        "detail": "FILE_CHUNK nie wiąże transfer_id ani chunk_index przez AAD. Chronione tylko dedupe po chunk_index + SHA-3-256 całego pliku. Chunk z jednego transferu teoretycznie da się wstrzyknąć do innego.",
+        "fix": "AAD='FILE|'+transfer_id+'|'+chunk_index w encrypt/decrypt chunków (sender, relay serwera, odbiorca, FileReceiver::on_chunk)."
+      },
+      {
+        "id": "sec-empty-passphrase",
+        "severity": "med",
+        "title": "Pusty passphrase = klucz tożsamości w plaintext",
+        "detail": "Profil z pustym hasłem zapisuje klucz jako QID1 (plaintext, chmod 0600) z ostrzeżeniem w UI. Brak też wymogu siły hasła.",
+        "fix": "Wymusić niepuste hasło dla nowych profili (lub minimalna długość) + opcjonalny wskaznik siły."
+      }
+    ],
+    "correctness": [
+      {
+        "id": "bug-shared-state-threads",
+        "severity": "low",
+        "title": "Współdzielony stan bez pełnej synchronizacji",
+        "detail": "m_security_level i m_msg_count czytane/pisane z wielu wątków bez mutexa/atomika; ryzyko wyścigów (głównie kosmetycznych liczników).",
+        "fix": "Przenieść na std::atomic lub zamknąć pod istniejące mutexy."
+      }
+    ],
+    "process": [
+      {
+        "id": "proc-imgui-not-vendored",
+        "severity": "med",
+        "title": "third_party/imgui poza repo",
+        "detail": "ImGui nie jest w repo (untracked) -> świeży git clone się nie zbuduje.",
+        "fix": "Dodać jako git submodule albo zwendorować z przypiętą wersją."
+      },
+      {
+        "id": "proc-no-ci",
+        "severity": "low",
+        "title": "Brak CI",
+        "detail": "Brak automatycznego build + ctest na push/PR.",
+        "fix": "GitHub Actions: build + ctest, opcjonalnie ASan/UBSan w debug."
+      }
     ]
   },
   "technical_stack": {
@@ -54,12 +106,12 @@
   "protocol_details": {
     "handshake": "1. ServerHello (DSA Key+Sig), 2. ClientKeyExchange (KEM Encapsulation + DSA Sig), 3. Session KDF: AES_key = HKDF-SHA256(shared_secret, salt=kyber_pub||ct, info='quill-aes256gcm-session-v1|LEVEL').",
     "wire_format": "Length-prefixed JSON string z zakodowanymi binariami (nlohmann/json binary_t).",
-    "security_logic": "Każda wiadomość Chat AES-GCM zawiera: nonce (12B), ciphertext i tag (16B). Odrzucenie paczki powoduje natychmiastowy alert (Fail-fast).",
+    "security_logic": "Każda wiadomość Chat AES-GCM zawiera: seq (monotoniczny per kierunek), nonce (12B), ciphertext i tag (16B). AAD='CHAT|<seq>' wiąże szyfrogram z sekwencją; odbiorca odrzuca seq<=ostatni (anty-replay, fail-closed). Odrzucenie paczki powoduje natychmiastowy alert (Fail-fast).",
     "file_transfer": "FILE_START (metadane) -> FILE_CHUNK (64KB, AES-GCM per chunk) -> FILE_END (SHA-3-256 całego pliku). Odbiorca składa chunki i weryfikuje hash przed zapisem."
   },
   "critical_notes_for_ai": {
     "compilation": "Wymaga linkowania OpenSSL, liboqs oraz nlohmann_json, GLFW, OpenGL3. Threading z pthread.",
-    "security": "PFS (rotacja kluczy) przebiega bez przerywania połączenia TCP (nowy PQC Handshake na żądanie). Klucz sesji przez HKDF-SHA256 z wiązaniem transkryptu - nigdy surowy shared_secret. Klucze DSA trwałe (profil + passphrase, Argon2id+AES-GCM at rest), Kyber zawsze efemeryczny. Logowanie = lokalne odblokowanie tożsamości, NIE uwierzytelnienie wobec sieci. Do testów dwóch instancji na jednej maszynie wystarczą dwa profile.",
+    "security": "PFS (rotacja kluczy) przebiega bez przerywania połączenia TCP (nowy PQC Handshake na żądanie). Klucz sesji przez HKDF-SHA256 z wiązaniem transkryptu - nigdy surowy shared_secret. Wiadomości CHAT chronione przed replay numerami sekwencji wiązanymi przez AAD GCM (fail-closed). Architektura to przekaźnik hub-and-spoke (serwer odszyfrowuje od nadawcy i re-szyfruje per odbiorca własnym kluczem sesji) - NIE end-to-end; serwer widzi plaintext (świadoma decyzja projektowa). Klucze DSA trwałe (profil + passphrase, Argon2id+AES-GCM at rest), Kyber zawsze efemeryczny. Logowanie = lokalne odblokowanie tożsamości, NIE uwierzytelnienie wobec sieci. Do testów dwóch instancji na jednej maszynie wystarczą dwa profile.",
     "levels": "FAST (Kyber512+Falcon512), BALANCED (Kyber768+MLDSA65), MAX (Kyber1024+MLDSA87)."
   }
 }

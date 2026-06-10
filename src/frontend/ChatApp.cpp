@@ -144,6 +144,11 @@ double ChatApp::ms(clk::time_point a, clk::time_point b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
 }
 
+Bytes ChatApp::chat_aad(uint64_t seq) {
+    std::string s = "CHAT|" + std::to_string(seq);
+    return Bytes(s.begin(), s.end());
+}
+
 void ChatApp::broadcast_raw_to_room(const std::string& room,
                                      const std::string& raw_json,
                                      std::shared_ptr<Socket> exclude)
@@ -268,9 +273,11 @@ void ChatApp::broadcast_to_room(const std::string& room, const std::string& msg,
     std::lock_guard lk(m_clients_mtx);
     for (auto& c : m_clients) {
         if (c.room == room && c.sock != exclude) {
-            auto enc = AesGcm::encrypt(c.aes_key, msg);
+            uint64_t seq = ++c.send_seq;          // monotoniczny per odbiorca
+            auto enc = AesGcm::encrypt(c.aes_key, msg, chat_aad(seq));
             json bcast;
             bcast["type"]    = "CHAT";
+            bcast["seq"]     = seq;
             bcast["nonce"]   = enc.nonce;
             bcast["payload"] = enc.ciphertext;
             bcast["sender"]  = "Network";
@@ -281,6 +288,58 @@ void ChatApp::broadcast_to_room(const std::string& room, const std::string& msg,
     }
 }
 
+// ── PFS (serwer) ──────────────────────────────────────────────────
+
+void ChatApp::perform_pfs_rotation(std::shared_ptr<Socket> sock,
+                                   const std::string& level) {
+    std::string room = "general";
+    {
+        std::lock_guard lk(m_clients_mtx);
+        for (auto& c : m_clients)
+            if (c.sock == sock) { room = c.room; break; }
+    }
+
+    json ack;
+    ack["type"]  = "DO_HANDSHAKE";
+    ack["level"] = level;
+    std::string s = ack.dump();
+    sock->send_bytes(Bytes(s.begin(), s.end()));
+
+    Bytes new_key = do_server_handshake(*sock, level);
+
+    {
+        std::lock_guard lk(m_clients_mtx);
+        for (auto& c : m_clients) {
+            if (c.sock == sock) {
+                c.aes_key  = new_key;
+                c.send_seq = 0;
+                c.recv_seq = 0;
+                break;
+            }
+        }
+    }
+    log("[SYSTEM] PFS key rotated.", Theme::yellow(), room);
+}
+
+void ChatApp::request_pfs_rotation(const std::string& room) {
+    std::lock_guard lk(m_clients_mtx);
+    for (auto& c : m_clients) {
+        if (c.room == room && c.sock)
+            c.pending_pfs_rotation = true;
+    }
+}
+
+bool ChatApp::take_pending_pfs_rotation(const std::shared_ptr<Socket>& sock) {
+    std::lock_guard lk(m_clients_mtx);
+    for (auto& c : m_clients) {
+        if (c.sock == sock && c.pending_pfs_rotation) {
+            c.pending_pfs_rotation = false;
+            return true;
+        }
+    }
+    return false;
+}
+
 // ── KOMUNIKACJA CZATOWA ───────────────────────────────────────────
 
 void ChatApp::send_chat_msg(const std::string& text) {
@@ -288,7 +347,8 @@ void ChatApp::send_chat_msg(const std::string& text) {
         Bytes key_copy;
         { std::lock_guard lk(m_session_mtx); key_copy = m_session_key; }
 
-        auto enc = AesGcm::encrypt(key_copy, text);
+        uint64_t seq = ++m_send_seq;
+        auto enc = AesGcm::encrypt(key_copy, text, chat_aad(seq));
 
         m_last_raw_nonce  = hex_preview(enc.nonce, 12);
         m_last_raw_cipher = hex_preview(enc.ciphertext, 32);
@@ -299,6 +359,7 @@ void ChatApp::send_chat_msg(const std::string& text) {
 
         json j;
         j["type"]    = "CHAT";
+        j["seq"]     = seq;
         j["nonce"]   = enc.nonce;
         j["payload"] = enc.ciphertext;
         j["sender"]  = "Client";
@@ -316,10 +377,9 @@ void ChatApp::send_chat_msg(const std::string& text) {
         log(msg, Theme::yellow(), m_current_room);
         m_msg_count++;
         if (m_msg_count % 5 == 0) {
-            json rot; rot["type"] = "REQ_LEVEL"; rot["level"] = m_security_level;
-            std::string rs = rot.dump();
-            m_client->send_bytes(Bytes(rs.begin(), rs.end()));
-            log("[SYSTEM] Auto-rotated PQC keys for PFS.", Theme::yellow(), m_current_room);
+            request_pfs_rotation(m_current_room);
+            log("[SYSTEM] Auto-rotating PFS keys for clients in #" + m_current_room + "...",
+                Theme::yellow(), m_current_room);
         }
     }
 }
@@ -382,33 +442,34 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
         }
 
         while (m_connected) {
-            Bytes data;
+            // Rotacja PFS inicjowana przez serwer (auto co N wiadomości) — tylko w tym wątku
+            if (take_pending_pfs_rotation(sock)) {
+                try {
+                    perform_pfs_rotation(sock, m_security_level);
+                } catch (const std::exception& e) {
+                    log(std::string("PFS rotation failed: ") + e.what(),
+                        Theme::red(), room);
+                }
+                continue;
+            }
+
+            std::optional<Bytes> data_opt;
             try {
-                data = sock->receive_bytes(); // zewnętrzny try wyłapuje błędy sieciowe (np. rozłączenie gniazda)
+                // Timeout pozwala obsłużyć pending_pfs_rotation bez czekania na klienta
+                data_opt = sock->try_receive_bytes(500);
             } catch (...) {
                 break;
             }
+            if (!data_opt) continue;
+
+            Bytes data = std::move(*data_opt);
 
             try { // wewnętrzny try-catch zapobiega przerywaniu połączenia przez np. błąd deszyfracji
                 auto j = json::parse(data.begin(), data.end());
                 std::string type = j["type"];
 
                 if (type == "REQ_LEVEL") {
-                    std::string lvl = j["level"];
-                    json ack; ack["type"] = "DO_HANDSHAKE"; ack["level"] = lvl;
-                    std::string s = ack.dump();
-                    sock->send_bytes(Bytes(s.begin(), s.end()));
-
-                    // Zmiana poziomu bez blokowania innych wątków
-                    Bytes new_key = do_server_handshake(*sock, lvl);
-
-                    std::lock_guard lk(m_clients_mtx);
-                    for(auto& c : m_clients) {
-                        if(c.sock == sock) {
-                            c.aes_key = new_key;
-                            break;
-                        }
-                    }
+                    perform_pfs_rotation(sock, j["level"]);
                     continue;
                 }
 
@@ -429,12 +490,26 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                 }
 
                 if (type == "CHAT") {
+                    uint64_t seq = j.value("seq", uint64_t{0});
                     Bytes s_key;
+                    uint64_t last_seq = 0;
                     {
                         std::lock_guard lk(m_clients_mtx);
-                        for (auto& c : m_clients) if (c.sock == sock) s_key = c.aes_key;
+                        for (auto& c : m_clients)
+                            if (c.sock == sock) { s_key = c.aes_key; last_seq = c.recv_seq; }
                     }
-                    std::string plain = AesGcm::decrypt(s_key, j["nonce"].get<Bytes>(), j["payload"].get<Bytes>());
+                    // AAD wiąże seq z szyfrogramem — najpierw deszyfrujemy z AAD
+                    // dla zadeklarowanego seq (podmiana seq psuje tag GCM)
+                    std::string plain = AesGcm::decrypt(s_key, j["nonce"].get<Bytes>(),
+                                                        j["payload"].get<Bytes>(), chat_aad(seq));
+                    // Anty-replay: seq musi rosnąć (fail-closed)
+                    if (seq <= last_seq)
+                        throw std::runtime_error("Replay detected (seq " +
+                            std::to_string(seq) + " <= " + std::to_string(last_seq) + ")");
+                    {
+                        std::lock_guard lk(m_clients_mtx);
+                        for (auto& c : m_clients) if (c.sock == sock) c.recv_seq = seq;
+                    }
                     std::string msg   = "[" + name + "]: " + plain;
                     log(msg, Theme::blue_text(), room);
                     broadcast_to_room(room, msg, sock);
@@ -558,6 +633,7 @@ void ChatApp::start_client() {
 
             Bytes key = do_client_handshake(*m_client, m_security_level);
             { std::lock_guard lk(m_session_mtx); m_session_key = key; }
+            m_send_seq = 0; m_recv_seq = 0;  // świeży licznik dla nowej sesji
 
             m_connected = true;
             log("PQC Secure Tunnel Established", Theme::green(), m_current_room);
@@ -589,11 +665,13 @@ void ChatApp::start_client() {
                     if (type == "DO_HANDSHAKE") {
                         Bytes new_key = do_client_handshake(*m_client, j["level"]);
                         { std::lock_guard lk(m_session_mtx); m_session_key = new_key; }
+                        m_send_seq = 0; m_recv_seq = 0;  // reset po rotacji PFS
                         continue;
                     }
 
                     if (type == "CHAT") {
                         std::string room = j.value("room", "general");
+                        uint64_t seq = j.value("seq", uint64_t{0});
                         Bytes curr_key;
                         { std::lock_guard lk(m_session_mtx); curr_key = m_session_key; }
 
@@ -603,7 +681,12 @@ void ChatApp::start_client() {
                         m_last_raw_nonce  = hex_preview(n, 12);
                         m_last_raw_cipher = hex_preview(p, 32);
 
-                        std::string plain = AesGcm::decrypt(curr_key, n, p);
+                        std::string plain = AesGcm::decrypt(curr_key, n, p, chat_aad(seq));
+                        // Anty-replay (fail-closed)
+                        if (seq <= m_recv_seq)
+                            throw std::runtime_error("Replay detected (seq " +
+                                std::to_string(seq) + " <= " + std::to_string(m_recv_seq.load()) + ")");
+                        m_recv_seq = seq;
                         log(plain, Theme::blue_text(), room);
                         m_msg_count++;
                     }

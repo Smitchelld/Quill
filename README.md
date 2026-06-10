@@ -78,6 +78,7 @@ ALICE                                          BOB
 | Session encryption | AES-256-GCM |
 | Key derivation | HKDF-SHA256, salt = handshake transcript |
 | Nonce safety | 96-bit random nonce per message |
+| Replay protection | Per-direction sequence numbers bound via GCM AAD (`CHAT\|<seq>`); receiver rejects seq ≤ last (fail-closed), reset on PFS rotation |
 
 ---
 
@@ -155,7 +156,7 @@ quill/
 │   ├── network/         # Socket, NetworkServer, NetworkClient (TCP, length-prefixed framing)
 │   ├── protocol/        # MessageFormat (JSON), FileTransfer (chunking + SHA-3)
 │   └── frontend/        # ImGui ChatApp, rendering, Theme
-├── tests/               # Google Test suite (81 tests), linked against quill_core
+├── tests/               # Google Test suite (87 tests), linked against quill_core
 ├── third_party/         # ImGui, portable-file-dialogs
 ├── main.cpp             # GLFW/OpenGL3 + ImGui entry point
 └── CMakeLists.txt
@@ -192,6 +193,7 @@ quill/
 
 - **No PKI** — trust is TOFU-based (like SSH/Signal): the first connection stores the peer key, fingerprints must be compared out-of-band to reach VERIFIED. There is no certificate authority — intentional for scope.
 - **Passphrase strength is the only offline defense** — identity keys are encrypted at rest with Argon2id + AES-256-GCM, but an attacker with the key file mounts an offline attack; there is deliberately no retry lockout (it would be security theater). Profiles with an empty passphrase store keys in plaintext (`0600`) and the UI warns about it.
+- **Server-relayed, not end-to-end** — the server is a trusted relay: it decrypts each message from the sender and re-encrypts it per recipient under that link's session key. Every hop is AES-256-GCM, but the server sees plaintext. This is an intentional hub-and-spoke design; true E2E would require a separate per-recipient key agreement.
 - **NAT traversal** — direct TCP, no STUN/TURN. Both peers must be reachable at a known address.
 
 ---
@@ -212,7 +214,8 @@ quill/
 - [x] Persistent identity keys (0600, self-test on load) + SHA-3 fingerprints
 - [x] Local profiles with login — at-rest key encryption (Argon2id + AES-256-GCM)
 - [x] TOFU (known_hosts per profile, UNVERIFIED/KNOWN/VERIFIED, fail-closed block on key change)
-- [x] Google Test suite — 81 tests (RFC vectors, tamper cases, TOFU attack scenarios, socketpair handshake integration)
+- [x] Replay protection for chat — per-direction sequence numbers bound via GCM AAD (fail-closed)
+- [x] Google Test suite — 87 tests (RFC vectors, tamper + AAD/replay cases, TOFU attack scenarios, socketpair handshake integration)
 - [ ] File transfer: selective repeat retransmission, per-chunk SHA-3
 - [ ] NAT traversal (UDP hole punching + rendezvous server)
 - [ ] Engineering thesis: intelligent PQC algorithm selection

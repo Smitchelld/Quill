@@ -76,6 +76,11 @@ struct ConnectedClient {
     Bytes                   aes_key;
     std::string             name;
     std::string             room = "general";
+    // Liczniki anty-replay per kierunek (resetowane przy rotacji klucza/PFS)
+    uint64_t                send_seq = 0;  // serwer -> ten klient
+    uint64_t                recv_seq = 0;  // ostatni seq odebrany od klienta
+    // Rotacja PFS inicjowana przez serwer (auto co N wiadomości); chronione m_clients_mtx
+    bool                    pending_pfs_rotation = false;
 };
 
 // ── CHATAPP ───────────────────────────────────────────────────────
@@ -121,6 +126,10 @@ private:
     Bytes       m_session_key;
     std::mutex  m_session_mtx;
     std::atomic<bool> m_connected{false};
+
+    // Liczniki anty-replay (klient). Resetowane po każdym handshake/rotacji.
+    std::atomic<uint64_t> m_send_seq{0};  // klient -> serwer
+    std::atomic<uint64_t> m_recv_seq{0};  // ostatni seq odebrany od serwera
 
     // ── SERWER ───────────────────────────────────────────────────
     std::unique_ptr<NetworkServer>       m_server;
@@ -226,12 +235,22 @@ private:
                            const std::string& msg,
                            std::shared_ptr<Socket> exclude = nullptr);
 
+    // PFS po stronie serwera — handshake musi przebiegać w wątku handlera klienta
+    void perform_pfs_rotation(std::shared_ptr<Socket> sock, const std::string& level);
+    void request_pfs_rotation(const std::string& room);
+    bool take_pending_pfs_rotation(const std::shared_ptr<Socket>& sock);
+
     // ── LOG HELPERS ──────────────────────────────────────────────
     void log(const std::string& text, ImVec4 color, const std::string& room = "general");
     void hs_step(const std::string& label, double time_ms = -1.0);
     void hs_clear();
 
     static std::string hex_preview(const Bytes& data, size_t n = 8);
+
+    // AAD anty-replay dla wiadomości CHAT: "CHAT|<seq>".
+    // Wiąże szyfrogram z numerem sekwencji — powtórka pakietu ma stary seq,
+    // a podmiana seq w JSON psuje tag GCM.
+    static Bytes chat_aad(uint64_t seq);
     static double      ms(std::chrono::high_resolution_clock::time_point a,
                           std::chrono::high_resolution_clock::time_point b);
 
