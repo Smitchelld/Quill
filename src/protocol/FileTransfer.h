@@ -13,89 +13,111 @@
 using Bytes = std::vector<uint8_t>;
 
 // ── STAŁE ─────────────────────────────────────────────────────────
-static constexpr size_t FILE_CHUNK_SIZE = 64 * 1024; // 64 KB
+static constexpr size_t  FILE_CHUNK_SIZE      = 64 * 1024; // 64 KB
+static constexpr uint32_t FILE_MAX_NACK_ROUNDS = 5;
 
 // ── FileSender ────────────────────────────────────────────────────
-// Rozbija plik na zaszyfrowane chunki i wywołuje callback dla każdego
-// pakietu gotowego do wysłania (jako JSON string).
-//
-// Użycie:
-//   FileSender::send(path, aes_key, sender_name,
-//       [](const std::string& pkt){ sock.send(pkt); });
-//
 class FileSender {
 public:
-    // Callback wywoływany dla każdego pakietu JSON gotowego do wysłania.
-    // Zwraca false jeśli wysyłka ma być przerwana.
     using SendCallback = std::function<bool(const std::string& packet_json)>;
 
-    // Wysyła plik. Rzuca std::runtime_error przy błędach I/O lub krypto.
-    // Zwraca false jeśli callback przerwał transfer.
     static bool send(const std::filesystem::path& file_path,
                      const Bytes& aes_key,
                      const std::string& sender_name,
                      const SendCallback& on_packet);
 
-    // Oblicza SHA-3-256 dla surowych danych
     static Bytes sha3_256(const Bytes& data);
 
     // AAD wiąże chunk z transfer_id i indeksem: "FILE|<tid>|<index>".
-    // Podmiana metadanych w JSON psuje tag GCM.
     static Bytes chunk_aad(const std::string& transfer_id, uint32_t chunk_index);
 };
 
+// Sesja nadawcy — trzyma plaintext chunków do selective repeat (nowy nonce przy retransmisji).
+class FileSenderSession {
+public:
+    static FileSenderSession open(const std::filesystem::path& file_path,
+                                  const Bytes& aes_key,
+                                  const std::string& sender_name);
+
+    const std::string& transfer_id() const { return m_transfer_id; }
+    uint32_t total_chunks() const { return m_total_chunks; }
+
+    bool send_start(const FileSender::SendCallback& on_packet) const;
+    bool send_all_chunks(const FileSender::SendCallback& on_packet) const;
+    bool send_end(const FileSender::SendCallback& on_packet) const;
+    bool send_all(const FileSender::SendCallback& on_packet);
+
+    bool retransmit(const std::vector<uint32_t>& indices,
+                    const FileSender::SendCallback& on_packet) const;
+
+private:
+    bool send_chunk_packet(uint32_t index, const FileSender::SendCallback& on_packet) const;
+
+    std::string              m_transfer_id;
+    Bytes                    m_aes_key;
+    std::string              m_sender_name;
+    std::string              m_file_name;
+    uint64_t                 m_file_size = 0;
+    uint32_t                 m_total_chunks = 0;
+    Bytes                    m_file_hash;
+    std::vector<Bytes>       m_chunks;
+};
+
 // ── IncomingFile ──────────────────────────────────────────────────
-// Stan częściowo odebranego pliku (przechowywany po stronie odbiorcy)
 struct IncomingFile {
-    std::string          file_name;
-    uint64_t             file_size     = 0;
-    uint32_t             total_chunks  = 0;
-    uint32_t             received      = 0;        // ile chunków już odebrano
-    std::map<uint32_t, Bytes> chunks;              // chunk_index → plaintext
-    Bytes                expected_hash;            // SHA-3-256 z FILE_END
+    std::string               file_name;
+    uint64_t                  file_size     = 0;
+    uint32_t                  total_chunks  = 0;
+    uint32_t                  received      = 0;
+    std::map<uint32_t, Bytes> chunks;
+    Bytes                     expected_hash;
+    bool                      awaiting_end  = false; // FILE_END dotarł, brakuje chunków
+    uint32_t                  nack_rounds   = 0;
 
-    // Złożenie wszystkich chunków w kolejności
     Bytes assemble() const;
-
     bool complete() const { return received == total_chunks; }
 };
 
+enum class FileEndStatus {
+    Complete,   // plik zapisany, on_done(ok=true)
+    NeedsNack,  // brakuje chunków — wyślij FILE_NACK, stan transferu zachowany
+    Failed      // błąd końcowy, on_done(ok=false)
+};
+
 // ── FileReceiver ──────────────────────────────────────────────────
-// Zarządza równoczesnymi transferami przychodzącymi (wiele plików naraz).
-//
-// Użycie (w dispatch loop):
-//   static FileReceiver receiver;
-//   if (type == "FILE_START")  receiver.on_start(j);
-//   if (type == "FILE_CHUNK")  receiver.on_chunk(j, aes_key);
-//   if (type == "FILE_END")    receiver.on_end(j, save_dir, on_done);
-//
 class FileReceiver {
 public:
-    // Rejestruje nowy transfer. Ignoruje duplikaty (idempotentne).
-    void on_start(const nlohmann::json& j);
-
-    // Odszyfrowuje i buforuje chunk. Rzuca std::runtime_error przy błędach krypto.
-    void on_chunk(const nlohmann::json& j, const Bytes& aes_key);
-
-    // Weryfikuje SHA-3, składa plik i zapisuje na dysk.
-    // on_done(file_name, save_path, ok, error_msg) — wywoływany zawsze.
     using DoneCallback = std::function<void(
         const std::string& file_name,
         const std::filesystem::path& save_path,
         bool ok,
         const std::string& error_msg)>;
 
-    void on_end(const nlohmann::json& j,
-                const std::filesystem::path& save_dir,
-                const DoneCallback& on_done);
+    void on_start(const nlohmann::json& j);
+    void on_chunk(const nlohmann::json& j, const Bytes& aes_key);
 
-    // Postęp transferu: zwraca {received_chunks, total_chunks} lub {0,0} jeśli brak
+    // Complete / Failed wywołują on_done. NeedsNack — nie; wyślij make_nack().
+    FileEndStatus on_end(const nlohmann::json& j,
+                         const std::filesystem::path& save_dir,
+                         const DoneCallback& on_done);
+
+    // Po uzupełnieniu brakujących chunków (FILE_END już był).
+    bool try_finalize(const std::string& transfer_id,
+                      const std::filesystem::path& save_dir,
+                      const DoneCallback& on_done);
+
+    std::vector<uint32_t> missing_chunks(const std::string& transfer_id) const;
+    nlohmann::json make_nack(const std::string& transfer_id) const;
+    bool needs_nack(const std::string& transfer_id) const;
+
     std::pair<uint32_t, uint32_t> progress(const std::string& transfer_id) const;
-
-    // Lista aktywnych transferów
     std::vector<std::string> active_transfers() const;
 
 private:
+    bool finalize_transfer(const std::string& transfer_id,
+                           const std::filesystem::path& save_dir,
+                           const DoneCallback& on_done);
+
     std::map<std::string, IncomingFile> m_incoming;
 };
 

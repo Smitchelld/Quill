@@ -15,7 +15,8 @@ enum class MsgType {
     HANDSHAKE,
     SYSTEM_CMD,
     FILE_START,
-    FILE_END
+    FILE_END,
+    FILE_NACK
 };
 
 struct SecureMessage {

@@ -19,7 +19,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake ninja-build pkg-config \
-            libssl-dev libgtest-dev nlohmann-json3-dev
+            libssl-dev libargon2-dev libgtest-dev nlohmann-json3-dev
 
       - name: Build and install liboqs
         run: |

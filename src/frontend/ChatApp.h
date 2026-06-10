@@ -194,6 +194,13 @@ private:
     std::map<std::string, FileTransferProgress> m_file_progress;
     std::mutex                                  m_file_progress_mtx;
 
+    // Aktywne wysyłki (selective repeat — sesja trzymana do retransmisji)
+    std::map<std::string, FileSenderSession>    m_outbound_sessions;
+    std::mutex                                  m_outbound_mtx;
+
+    // Serwer: socket nadawcy per transfer_id (przekazywanie FILE_NACK)
+    std::map<std::string, std::weak_ptr<Socket>> m_file_origin_sock;
+    std::mutex                                   m_file_origin_mtx;
 
     // ── RENDER ───────────────────────────────────────────────────
     void render_login_panel();
@@ -218,6 +225,10 @@ private:
     void send_chat_msg(const std::string& text);
     void server_client_handler(std::shared_ptr<Socket> sock, int id);
     void send_file(const std::filesystem::path& path);
+    void handle_outbound_nack(const json& j);
+    void send_file_nack(const json& nack);
+    void try_complete_incoming_file(const std::string& transfer_id, const std::string& room);
+    void retain_outbound_session(FileSenderSession session);
 
     // ── HANDSHAKE ────────────────────────────────────────────────
     Bytes do_client_handshake(Socket& sock, const std::string& level);

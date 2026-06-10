@@ -102,8 +102,8 @@ Quill supports three configurable security levels, selectable at connection time
 # Arch Linux
 sudo pacman -S cmake openssl
 
-# Ubuntu/Debian
-sudo apt install cmake libssl-dev
+# Ubuntu/Debian (OpenSSL < 3.2 wymaga libargon2 dla szyfrowania profili)
+sudo apt install cmake libssl-dev libargon2-dev
 ```
 
 **liboqs** must be built from source:
@@ -222,7 +222,8 @@ quill/
 - [x] TOFU (known_hosts per profile, UNVERIFIED/KNOWN/VERIFIED, fail-closed block on key change)
 - [x] Replay protection for chat — per-direction sequence numbers bound via GCM AAD (fail-closed)
 - [x] Google Test suite — 89 tests (RFC vectors, tamper + AAD/replay cases, TOFU attack scenarios, socketpair handshake integration)
-- [ ] File transfer: selective repeat retransmission, per-chunk SHA-3
+- [x] File transfer: selective repeat retransmission (FILE_NACK)
+- [ ] File transfer: per-chunk SHA-3
 - [ ] NAT traversal (UDP hole punching + rendezvous server)
 - [ ] Engineering thesis: intelligent PQC algorithm selection
 

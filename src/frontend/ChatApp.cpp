@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 
 
 
@@ -531,13 +532,18 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                     m_msg_count++;
                 }
                 if (type == "FILE_START") {
+                    std::string tid = j["transfer_id"];
+                    {
+                        std::lock_guard lk(m_file_origin_mtx);
+                        m_file_origin_sock[tid] = sock;
+                    }
+
                     std::lock_guard lk(m_file_receiver_mtx);
                     m_file_receiver.on_start(j);
 
                     std::string sender_name = j.value("sender", name);
                     std::string fname       = j["file_name"];
                     uint32_t    total       = j["total_chunks"];
-                    std::string tid         = j["transfer_id"];
 
                     {
                         std::lock_guard lk2(m_file_progress_mtx);
@@ -565,19 +571,21 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                     Bytes plain_chunk = AesGcm::decrypt_bytes(
                         s_key, nonce, payload, FileSender::chunk_aad(tid, idx));
 
-                    // 2. Obsługa lokalnego odbioru na serwerze (opcjonalnie, do logów/zapisu)
+                    // 2. Lokalny odbiór na serwerze
+                    uint32_t before = 0, after = 0;
                     {
                         std::lock_guard lk(m_file_receiver_mtx);
-                        // Przygotowujemy czysty json bez szyfrogramów do funkcji on_chunk
-                        json local_j = j;
+                        before = m_file_receiver.progress(tid).first;
                         m_file_receiver.on_chunk(j, s_key);
+                        after = m_file_receiver.progress(tid).first;
                     }
 
-                    {
+                    if (after > before) {
                         std::lock_guard lk(m_file_progress_mtx);
                         auto it = m_file_progress.find(tid);
                         if (it != m_file_progress.end()) it->second.received++;
                     }
+                    try_complete_incoming_file(tid, room);
 
                     // 3. RE-SZYFROWANIE DLA INNYCH KLIENTÓW W POKOJU
                     std::lock_guard lk(m_clients_mtx);
@@ -599,28 +607,66 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                     // 1. NAJPIERW wyślij do innych klientów, by błędy zapisu na serwerze nie psuły transferu P2P!
                     broadcast_raw_to_room(room, j.dump(), sock);
 
-                    // 2. Potem opcjonalny zapis logu/pliku na serwerze
-                    std::lock_guard lk(m_file_receiver_mtx);
-                    m_file_receiver.on_end(j, std::filesystem::path(m_download_dir_buf),
-                        [this, &room, j](const std::string& fname,
-                                         const std::filesystem::path& path,
-                                         bool ok, const std::string& err)
-                        {
-                            if (ok) {
-                                log("[FILE] ✓ Zapisano na serwerze: " + path.string(), Theme::green(), room);
-                            } else {
-                                log("[FILE] ✗ BŁĄD serwera: " + err, Theme::red(), room);
-                            }
+                    // 2. Zapis na serwerze (+ selective repeat)
+                    std::string tid = j["transfer_id"];
+                    FileEndStatus st;
+                    json nack;
+                    {
+                        std::lock_guard lk(m_file_receiver_mtx);
+                        st = m_file_receiver.on_end(j, std::filesystem::path(m_download_dir_buf),
+                            [this, &room, tid](const std::string& fname,
+                                               const std::filesystem::path& path,
+                                               bool ok, const std::string& err)
+                            {
+                                if (ok) {
+                                    log("[FILE] ✓ Zapisano na serwerze: " + path.string(),
+                                        Theme::green(), room);
+                                } else {
+                                    log("[FILE] ✗ BŁĄD serwera: " + err, Theme::red(), room);
+                                }
 
-                            std::lock_guard lk2(m_file_progress_mtx);
-                            std::string tid = j["transfer_id"];
-                            auto it = m_file_progress.find(tid);
-                            if (it != m_file_progress.end()) {
-                                it->second.done = true;
-                                it->second.ok   = ok;
-                                it->second.error_msg = err;
-                            }
-                        });
+                                std::lock_guard lk2(m_file_progress_mtx);
+                                auto it = m_file_progress.find(tid);
+                                if (it != m_file_progress.end()) {
+                                    it->second.done = true;
+                                    it->second.ok   = ok;
+                                    it->second.error_msg = err;
+                                }
+                            });
+                        if (st == FileEndStatus::NeedsNack)
+                            nack = m_file_receiver.make_nack(tid);
+                    }
+                    if (st == FileEndStatus::NeedsNack) {
+                        log("[FILE] NACK → nadawca: brakuje " +
+                            std::to_string(nack["missing"].size()) + " chunków",
+                            Theme::yellow(), room);
+                        std::shared_ptr<Socket> origin;
+                        {
+                            std::lock_guard lk(m_file_origin_mtx);
+                            auto it = m_file_origin_sock.find(tid);
+                            if (it != m_file_origin_sock.end()) origin = it->second.lock();
+                        }
+                        if (origin) {
+                            std::string s = nack.dump();
+                            origin->send_bytes(Bytes(s.begin(), s.end()));
+                        }
+                    }
+                }
+                else if (type == "FILE_NACK") {
+                    // Klient-odbiorca prosi o retransmisję → przekaż do nadawcy
+                    std::string tid = j["transfer_id"];
+                    std::shared_ptr<Socket> origin;
+                    {
+                        std::lock_guard lk(m_file_origin_mtx);
+                        auto it = m_file_origin_sock.find(tid);
+                        if (it != m_file_origin_sock.end()) origin = it->second.lock();
+                    }
+                    if (origin && origin != sock) {
+                        std::string s = j.dump();
+                        origin->send_bytes(Bytes(s.begin(), s.end()));
+                        log("[FILE] NACK przekazany do nadawcy (" + tid + ")",
+                            Theme::yellow(), room);
+                    }
                 }
             } catch (const std::exception& e) {
                 log(std::string("Security Alert: ") + e.what(), Theme::red(), room);
@@ -725,34 +771,56 @@ void ChatApp::start_client() {
                     { std::lock_guard lk(m_session_mtx); curr_key = m_session_key; }
                     std::string tid = j["transfer_id"];
 
-                    { std::lock_guard lk(m_file_receiver_mtx);
-                      m_file_receiver.on_chunk(j, curr_key); }
+                    uint32_t before = 0, after = 0;
+                    {
+                        std::lock_guard lk(m_file_receiver_mtx);
+                        before = m_file_receiver.progress(tid).first;
+                        m_file_receiver.on_chunk(j, curr_key);
+                        after = m_file_receiver.progress(tid).first;
+                    }
 
-                    { std::lock_guard lk(m_file_progress_mtx);
-                      auto it = m_file_progress.find(tid);
-                      if (it != m_file_progress.end()) it->second.received++; }
+                    if (after > before) {
+                        std::lock_guard lk(m_file_progress_mtx);
+                        auto it = m_file_progress.find(tid);
+                        if (it != m_file_progress.end()) it->second.received++;
+                    }
+                    try_complete_incoming_file(tid, m_current_room);
                 }else if (type == "FILE_END") {
-                    std::lock_guard lk(m_file_receiver_mtx);
-                    m_file_receiver.on_end(j, std::filesystem::path(m_download_dir_buf),
-                        [this, j](const std::string& fname,
-                               const std::filesystem::path& path,
-                               bool ok, const std::string& err)
-                        {
-                            if (ok)
-                                log("[FILE] ✓ Zapisano: " + path.string(), Theme::green(), m_current_room);
-                            else
-                                log("[FILE] ✗ BŁĄD: " + err, Theme::red(), m_current_room);
+                    std::string tid = j["transfer_id"];
+                    FileEndStatus st;
+                    json nack;
+                    {
+                        std::lock_guard lk(m_file_receiver_mtx);
+                        st = m_file_receiver.on_end(j, std::filesystem::path(m_download_dir_buf),
+                            [this, tid](const std::string& fname,
+                                        const std::filesystem::path& path,
+                                        bool ok, const std::string& err)
+                            {
+                                if (ok)
+                                    log("[FILE] ✓ Zapisano: " + path.string(),
+                                        Theme::green(), m_current_room);
+                                else
+                                    log("[FILE] ✗ BŁĄD: " + err, Theme::red(), m_current_room);
 
-                            // AKTUALIZACJA PASKÓW UI
-                            std::lock_guard lk2(m_file_progress_mtx);
-                            std::string tid = j["transfer_id"];
-                            auto it = m_file_progress.find(tid);
-                            if (it != m_file_progress.end()) {
-                                it->second.done = true;
-                                it->second.ok = ok;
-                                it->second.error_msg = err;
-                            }
-                        });
+                                std::lock_guard lk2(m_file_progress_mtx);
+                                auto it = m_file_progress.find(tid);
+                                if (it != m_file_progress.end()) {
+                                    it->second.done = true;
+                                    it->second.ok = ok;
+                                    it->second.error_msg = err;
+                                }
+                            });
+                        if (st == FileEndStatus::NeedsNack)
+                            nack = m_file_receiver.make_nack(tid);
+                    }
+                    if (st == FileEndStatus::NeedsNack) {
+                        log("[FILE] NACK: proszę o " +
+                            std::to_string(nack["missing"].size()) + " chunków",
+                            Theme::yellow(), m_current_room);
+                        send_file_nack(nack);
+                    }
+                }else if (type == "FILE_NACK") {
+                    handle_outbound_nack(j);
                 }
                 } catch (const std::exception& e) {
                     log(std::string("Security Alert (Tamper?): ") + e.what(), Theme::red(), m_current_room);
@@ -847,6 +915,71 @@ std::vector<SecurityEstimate> ChatApp::build_security_estimates(const std::strin
     return est;
 }
 
+void ChatApp::retain_outbound_session(FileSenderSession session) {
+    const std::string tid = session.transfer_id();
+    {
+        std::lock_guard lk(m_outbound_mtx);
+        m_outbound_sessions[tid] = std::move(session);
+    }
+    std::thread([this, tid]() {
+        std::this_thread::sleep_for(std::chrono::minutes(2));
+        std::lock_guard lk(m_outbound_mtx);
+        m_outbound_sessions.erase(tid);
+        std::lock_guard lk2(m_file_origin_mtx);
+        m_file_origin_sock.erase(tid);
+    }).detach();
+}
+
+void ChatApp::send_file_nack(const json& nack) {
+    if (!m_connected || !m_client) return;
+    std::string s = nack.dump();
+    m_client->send_bytes(Bytes(s.begin(), s.end()));
+}
+
+void ChatApp::handle_outbound_nack(const json& j) {
+    std::string tid = j["transfer_id"];
+    auto missing = j["missing"].get<std::vector<uint32_t>>();
+    if (missing.empty()) return;
+
+    std::lock_guard lk(m_outbound_mtx);
+    auto it = m_outbound_sessions.find(tid);
+    if (it == m_outbound_sessions.end()) return;
+
+    auto send_cb = [this](const std::string& pkt) -> bool {
+        if (!m_connected || !m_client) return false;
+        m_client->send_bytes(Bytes(pkt.begin(), pkt.end()));
+        return true;
+    };
+
+    if (it->second.retransmit(missing, send_cb))
+        log("[FILE] Retransmisja " + std::to_string(missing.size()) + " chunków",
+            Theme::yellow(), m_current_room);
+}
+
+void ChatApp::try_complete_incoming_file(const std::string& transfer_id,
+                                         const std::string& room)
+{
+    std::lock_guard lk(m_file_receiver_mtx);
+    m_file_receiver.try_finalize(transfer_id, std::filesystem::path(m_download_dir_buf),
+        [this, transfer_id, room](const std::string& fname,
+                                  const std::filesystem::path& path,
+                                  bool ok, const std::string& err)
+        {
+            if (ok)
+                log("[FILE] ✓ Zapisano: " + path.string(), Theme::green(), room);
+            else
+                log("[FILE] ✗ BŁĄD: " + err, Theme::red(), room);
+
+            std::lock_guard lk2(m_file_progress_mtx);
+            auto it = m_file_progress.find(transfer_id);
+            if (it != m_file_progress.end()) {
+                it->second.done = true;
+                it->second.ok = ok;
+                it->second.error_msg = err;
+            }
+        });
+}
+
 void ChatApp::send_file(const std::filesystem::path& file_path) {
     if (!m_connected || m_mode != AppMode::CLIENT) return;
 
@@ -857,16 +990,21 @@ void ChatApp::send_file(const std::filesystem::path& file_path) {
 
     std::thread([this, file_path, key_copy, sender]() {
         try {
-            bool ok = FileSender::send(file_path, key_copy, sender,
-                [this](const std::string& pkt) -> bool {
-                    if (!m_connected) return false;
-                    Bytes data(pkt.begin(), pkt.end());
-                    m_client->send_bytes(data);
-                    return true;
-                });
+            FileSenderSession session =
+                FileSenderSession::open(file_path, key_copy, sender);
+
+            auto send_cb = [this](const std::string& pkt) -> bool {
+                if (!m_connected || !m_client) return false;
+                m_client->send_bytes(Bytes(pkt.begin(), pkt.end()));
+                return true;
+            };
+
+            bool ok = session.send_all(send_cb);
+            retain_outbound_session(std::move(session));
 
             if (ok)
-                log("[FILE] Wysłano: " + file_path.filename().string(), Theme::green(), m_current_room);
+                log("[FILE] Wysłano: " + file_path.filename().string(),
+                    Theme::green(), m_current_room);
             else
                 log("[FILE] Transfer przerwany.", Theme::yellow(), m_current_room);
 

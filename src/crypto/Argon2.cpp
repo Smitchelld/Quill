@@ -1,11 +1,16 @@
 #include "Argon2.h"
 
-#include <openssl/kdf.h>
-#include <openssl/core_names.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
-#include <memory>
 #include <stdexcept>
+
+#if defined(QUILL_USE_LIBARGON2)
+#include <argon2.h>
+#else
+#include <openssl/kdf.h>
+#include <openssl/core_names.h>
+#include <memory>
+#endif
 
 Bytes Argon2::random_salt() {
     Bytes salt(SALT_LEN);
@@ -23,6 +28,18 @@ Bytes Argon2::derive(const std::string& passphrase,
     if (salt.empty())
         throw std::runtime_error("Argon2: pusta sol");
 
+#if defined(QUILL_USE_LIBARGON2)
+    Bytes out(out_len);
+    const int rc = argon2id_hash_raw(
+        t_cost, m_cost_kib, lanes,
+        passphrase.data(), passphrase.size(),
+        salt.data(), salt.size(),
+        out.data(), out.size());
+    if (rc != ARGON2_OK)
+        throw std::runtime_error("Argon2: argon2id_hash_raw nie powiodl sie (kod " +
+                                 std::to_string(rc) + ")");
+    return out;
+#else
     using KdfPtr = std::unique_ptr<EVP_KDF, decltype(&EVP_KDF_free)>;
     using CtxPtr = std::unique_ptr<EVP_KDF_CTX, decltype(&EVP_KDF_CTX_free)>;
 
@@ -35,7 +52,7 @@ Bytes Argon2::derive(const std::string& passphrase,
     if (!ctx)
         throw std::runtime_error("Argon2: EVP_KDF_CTX_new nie powiodl sie");
 
-    uint32_t threads = 1; // lanes=1 nie wymaga OSSL_set_max_threads
+    uint32_t threads = 1;
     OSSL_PARAM params[] = {
         OSSL_PARAM_construct_octet_string(
             OSSL_KDF_PARAM_PASSWORD,
@@ -55,4 +72,5 @@ Bytes Argon2::derive(const std::string& passphrase,
         throw std::runtime_error("Argon2: EVP_KDF_derive nie powiodl sie");
 
     return out;
+#endif
 }

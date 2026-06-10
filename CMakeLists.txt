@@ -10,6 +10,14 @@ find_package(nlohmann_json REQUIRED)
 find_library(OQS_LIB oqs REQUIRED)
 find_path(OQS_INCLUDE oqs/oqs.h REQUIRED)
 
+# Argon2id: OpenSSL >= 3.2 (EVP_KDF) albo libargon2 na starszych dystrybucjach (np. Ubuntu CI)
+if (OPENSSL_VERSION VERSION_LESS "3.2")
+    find_library(ARGON2_LIB argon2 REQUIRED)
+    message(STATUS "OpenSSL ${OPENSSL_VERSION} — Argon2id przez libargon2")
+else()
+    message(STATUS "OpenSSL ${OPENSSL_VERSION} — Argon2id przez EVP_KDF")
+endif()
+
 if (QUILL_BUILD_GUI)
     find_package(glfw3  REQUIRED)
     find_package(OpenGL REQUIRED)
@@ -61,6 +69,10 @@ target_link_libraries(quill_core PUBLIC
         OpenSSL::Crypto
         nlohmann_json::nlohmann_json
 )
+if (OPENSSL_VERSION VERSION_LESS "3.2")
+    target_compile_definitions(quill_core PRIVATE QUILL_USE_LIBARGON2=1)
+    target_link_libraries(quill_core PUBLIC ${ARGON2_LIB})
+endif()
 
 # ── GŁÓWNY BINARY ─────────────────────────────────────────────────
 if (QUILL_BUILD_GUI)
