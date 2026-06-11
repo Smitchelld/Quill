@@ -30,6 +30,8 @@ public:
 
     // AAD wiąże chunk z transfer_id i indeksem: "FILE|<tid>|<index>".
     static Bytes chunk_aad(const std::string& transfer_id, uint32_t chunk_index);
+
+    // SHA-3-256 pojedynczego chunka plaintextu (pole chunk_hash w FILE_CHUNK).
 };
 
 // Sesja nadawcy — trzyma plaintext chunków do selective repeat (nowy nonce przy retransmisji).

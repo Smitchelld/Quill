@@ -101,13 +101,15 @@ bool FileSenderSession::send_chunk_packet(uint32_t index,
     if (index >= m_total_chunks)
         throw std::runtime_error("Nieprawidłowy chunk_index: " + std::to_string(index));
 
-    auto enc = AesGcm::encrypt(m_aes_key, m_chunks[index],
+    const Bytes& plain = m_chunks[index];
+    auto enc = AesGcm::encrypt(m_aes_key, plain,
                                FileSender::chunk_aad(m_transfer_id, index));
 
     json j;
     j["type"]        = "FILE_CHUNK";
     j["transfer_id"] = m_transfer_id;
     j["chunk_index"] = index;
+    j["chunk_hash"]  = FileSender::sha3_256(plain); // SHA-3 plaintextu — weryfikacja przed buforowaniem
     j["nonce"]       = enc.nonce;
     j["payload"]     = enc.ciphertext;
     return on_packet(j.dump());
@@ -188,6 +190,18 @@ void FileReceiver::on_chunk(const json& j, const Bytes& aes_key) {
 
     Bytes plain = AesGcm::decrypt_bytes(aes_key, nonce, payload,
                                         FileSender::chunk_aad(tid, idx));
+
+    if (!j.contains("chunk_hash"))
+        throw std::runtime_error("FILE_CHUNK: brak chunk_hash");
+
+    Bytes expected_hash = j["chunk_hash"].get<Bytes>();
+    if (expected_hash.size() != 32)
+        throw std::runtime_error("FILE_CHUNK: nieprawidlowy rozmiar chunk_hash");
+
+    Bytes actual_hash = FileSender::sha3_256(plain);
+    if (actual_hash != expected_hash)
+        throw std::runtime_error("FILE_CHUNK: chunk_hash nie pasuje (chunk #" +
+                                 std::to_string(idx) + ")");
 
     if (it->second.chunks.count(idx) == 0) {
         it->second.chunks[idx] = std::move(plain);

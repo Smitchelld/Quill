@@ -38,11 +38,11 @@
       "AAD dla FILE_CHUNK: FileSender::chunk_aad('FILE|tid|index') wiąże każdy chunk; sender, FileReceiver::on_chunk i relay serwera używają tego samego AAD; testy: cross-transfer injection, zły chunk_index",
       "Wymóg niepustego passphrase przy tworzeniu profilu (ProfileManager::create + walidacja w UI); nowe profile zawsze encrypted=true (QID2)",
       "Siła passphrase: MIN_PASSPHRASE_LEN=8, odrzucenie powtarzającego się jednego znaku (np. aaaaaaaa); walidacja w ProfileManager + UI; unlock bez zmiany polityki (legacy profile)",
-      "Selective repeat (FILE_NACK): odbiorca zgłasza brakujące chunk_index, FileSenderSession retransmituje z nowym nonce, try_finalize po uzupełnieniu; max 5 rund NACK; relay serwera przekazuje NACK do nadawcy"
+      "Selective repeat (FILE_NACK): odbiorca zgłasza brakujące chunk_index, FileSenderSession retransmituje z nowym nonce, try_finalize po uzupełnieniu; max 5 rund NACK; relay serwera przekazuje NACK do nadawcy",
+      "SHA-3 per chunk: FILE_CHUNK zawiera chunk_hash=SHA3-256(plaintext); odbiorca weryfikuje po deszyfracji GCM przed buforowaniem (fail-fast); FILE_END nadal weryfikuje hash całości"
     ],
     "in_progress": [],
     "todo": [
-      "File transfer - SHA-3 per chunk dla wczesnej detekcji korupcji",
       "NAT Traversal: UDP hole punching z serwerem rendezvous (serwer widzi tylko IP:port, nie treść)"
     ]
   },
@@ -95,7 +95,7 @@
     "handshake": "1. ServerHello (DSA Key+Sig), 2. ClientKeyExchange (KEM Encapsulation + DSA Sig), 3. Session KDF: AES_key = HKDF-SHA256(shared_secret, salt=kyber_pub||ct, info='quill-aes256gcm-session-v1|LEVEL').",
     "wire_format": "Length-prefixed JSON string z zakodowanymi binariami (nlohmann/json binary_t).",
     "security_logic": "Każda wiadomość Chat AES-GCM zawiera: seq (monotoniczny per kierunek), nonce (12B), ciphertext i tag (16B). AAD='CHAT|<seq>' wiąże szyfrogram z sekwencją; odbiorca odrzuca seq<=ostatni (anty-replay, fail-closed). Odrzucenie paczki powoduje natychmiastowy alert (Fail-fast).",
-    "file_transfer": "FILE_START -> FILE_CHUNK (64KB, AES-GCM per chunk, AAD FILE|tid|index) -> FILE_END (SHA-3-256). Brakujące chunki: FILE_NACK z listą indeksów -> selective repeat (nowy nonce). Max 5 rund NACK."
+    "file_transfer": "FILE_START -> FILE_CHUNK (64KB, AES-GCM per chunk, AAD FILE|tid|index, chunk_hash=SHA3-256 plaintextu) -> FILE_END (SHA-3-256 całości). Weryfikacja chunk_hash po deszyfracji (przed buforowaniem). Brakujące chunki: FILE_NACK -> selective repeat. Max 5 rund NACK."
   },
   "critical_notes_for_ai": {
     "compilation": "Wymaga linkowania OpenSSL, liboqs oraz nlohmann_json, GLFW, OpenGL3. Threading z pthread.",

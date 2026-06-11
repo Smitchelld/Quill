@@ -223,7 +223,7 @@ quill/
 - [x] Replay protection for chat — per-direction sequence numbers bound via GCM AAD (fail-closed)
 - [x] Google Test suite — 89 tests (RFC vectors, tamper + AAD/replay cases, TOFU attack scenarios, socketpair handshake integration)
 - [x] File transfer: selective repeat retransmission (FILE_NACK)
-- [ ] File transfer: per-chunk SHA-3
+- [x] File transfer: per-chunk SHA-3 (early integrity check before buffering)
 - [ ] NAT traversal (UDP hole punching + rendezvous server)
 - [ ] Engineering thesis: intelligent PQC algorithm selection
 

@@ -234,6 +234,48 @@ TEST_F(FileTransferTest, WrongChunkIndexRejected) {
     EXPECT_THROW(rx.on_chunk(chunk, key32()), std::runtime_error);
 }
 
+TEST_F(FileTransferTest, ChunkHashPresentAndValid) {
+    Bytes original = make_source(150 * 1024);
+    FileSenderSession session = FileSenderSession::open(m_src, key32(), "tester");
+    auto packets = collect_session_packets(session);
+
+    json chunk = json::parse(packets[1]);
+    EXPECT_TRUE(chunk.contains("chunk_hash"));
+    EXPECT_EQ(chunk["chunk_hash"].get<Bytes>().size(), 32u);
+
+    // hash w pakiecie = SHA3(plaintext chunka 0)
+    size_t end = std::min(FILE_CHUNK_SIZE, original.size());
+    Bytes plain0(original.begin(), original.begin() + end);
+    EXPECT_EQ(chunk["chunk_hash"].get<Bytes>(), FileSender::sha3_256(plain0));
+}
+
+TEST_F(FileTransferTest, WrongChunkHashRejected) {
+    make_source(10 * 1024);
+    auto packets = collect_packets();
+
+    json chunk = json::parse(packets[1]);
+    Bytes h = chunk["chunk_hash"].get<Bytes>();
+    h[0] ^= 0x01;
+    chunk["chunk_hash"] = h;
+
+    FileReceiver rx;
+    rx.on_start(json::parse(packets[0]));
+    EXPECT_THROW(rx.on_chunk(chunk, key32()), std::runtime_error);
+    EXPECT_EQ(rx.progress(json::parse(packets[0])["transfer_id"]).first, 0u);
+}
+
+TEST_F(FileTransferTest, MissingChunkHashRejected) {
+    make_source(10 * 1024);
+    auto packets = collect_packets();
+
+    json chunk = json::parse(packets[1]);
+    chunk.erase("chunk_hash");
+
+    FileReceiver rx;
+    rx.on_start(json::parse(packets[0]));
+    EXPECT_THROW(rx.on_chunk(chunk, key32()), std::runtime_error);
+}
+
 TEST_F(FileTransferTest, MakeNackListsMissingIndices) {
     make_source(150 * 1024);
     FileSenderSession session = FileSenderSession::open(m_src, key32(), "tester");
