@@ -162,8 +162,10 @@ quill/
 │   ├── network/         # Socket, NetworkServer, NetworkClient (TCP, length-prefixed framing)
 │   ├── protocol/        # MessageFormat (JSON), FileTransfer (chunking + SHA-3)
 │   └── frontend/        # ImGui ChatApp, rendering, Theme
-├── tests/               # Google Test suite (89 tests), linked against quill_core
+├── tests/               # Google Test suite (97 tests), linked against quill_core
 ├── third_party/         # ImGui (git submodule), portable-file-dialogs
+├── .github/workflows/   # CI: build + ctest (headless)
+├── docs/                # OVERVIEW.md — stan projektu (PL)
 ├── main.cpp             # GLFW/OpenGL3 + ImGui entry point
 └── CMakeLists.txt
 ```
@@ -190,7 +192,8 @@ quill/
 **Libraries:**
 
 - [liboqs](https://openquantumsafe.org) — Open Quantum Safe, MIT license — Kyber, Dilithium, FALCON, SPHINCS+
-- [OpenSSL](https://openssl.org) — Apache 2.0 — AES-256-GCM, HKDF, RAND_bytes
+- [OpenSSL](https://openssl.org) — Apache 2.0 — AES-256-GCM, HKDF, SHA-3, RAND_bytes; Argon2id (≥3.2)
+- [libargon2](https://github.com/P-H-C/phc-winner-argon2) — fallback Argon2id when OpenSSL &lt; 3.2 (e.g. Ubuntu CI)
 - [nlohmann/json](https://github.com/nlohmann/json) — MIT — message serialization
 
 ---
@@ -221,7 +224,9 @@ quill/
 - [x] Local profiles with login — at-rest key encryption (Argon2id + AES-256-GCM)
 - [x] TOFU (known_hosts per profile, UNVERIFIED/KNOWN/VERIFIED, fail-closed block on key change)
 - [x] Replay protection for chat — per-direction sequence numbers bound via GCM AAD (fail-closed)
-- [x] Google Test suite — 89 tests (RFC vectors, tamper + AAD/replay cases, TOFU attack scenarios, socketpair handshake integration)
+- [x] Google Test suite — 97 tests (RFC vectors, tamper + AAD/replay, TOFU attacks, file transfer NACK + chunk_hash, socketpair handshake)
+- [x] GitHub Actions CI (headless build + ctest)
+- [x] Argon2 dual backend (OpenSSL ≥3.2 or libargon2)
 - [x] File transfer: selective repeat retransmission (FILE_NACK)
 - [x] File transfer: per-chunk SHA-3 (early integrity check before buffering)
 - [ ] NAT traversal (UDP hole punching + rendezvous server)

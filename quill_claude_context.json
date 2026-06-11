@@ -26,46 +26,50 @@
   },
 
   "current_state": {
+    "version": "1.0.0",
     "done": [
       "liboqs built and integrated",
       "Kyber-512/768/1024 KEM (encaps, decaps)",
       "Dilithium/Falcon digital signatures",
       "AES-256-GCM encrypt/decrypt with random nonce + optional AAD (context binding)",
-      "Replay protection for CHAT: per-direction monotonic sequence numbers bound via GCM AAD='CHAT|<seq>'; receiver rejects seq<=last (fail-closed); counters reset on every handshake/PFS rotation; tampering with seq breaks the GCM tag",
+      "Replay protection for CHAT: per-direction monotonic sequence numbers bound via GCM AAD='CHAT|<seq>'; receiver rejects seq<=last (fail-closed); counters reset on every handshake/PFS rotation",
       "TCP network layer (Socket, NetworkServer, NetworkClient)",
       "Full PQC Handshake with Server/Client verification",
       "ImGui Frontend (ChatApp, Theme) with Handshake visualization",
       "Multi-client support via std::thread",
       "Forward Secrecy (PFS) - key rotation",
       "Security levels and benchmarking tools",
-      "HKDF-SHA256 session key derivation (Hkdf.h/.cpp): salt = handshake transcript (kyber_pub||ct), domain-separated info, raw secret cleansed after use, RFC 5869 test vector verified",
-      "Identity management (IdentityManager.h/.cpp): persistent ML-DSA/Falcon keys, 0600/0700 perms enforced on load (OpenSSH-style), atomic write, sign/verify self-test on load, SHA-3-256 fingerprint (XXXX-XXXX-... format) logged in UI",
-      "Profiles + login: ProfileManager (~/.quill/profiles/<name>/ or $QUILL_PROFILES_DIR), profile.json with public fingerprint, name whitelist validation; QID2 at-rest encryption = Argon2id (EVP_KDF, t=3 m=64MiB, params stored in file) + AES-256-GCM; wrong passphrase = GCM tag fail (single indistinguishable error); QID1->QID2 in-place migration for legacy profiles; new profiles require non-empty passphrase (always encrypted); ImGui login screen, logout disabled during active session (keys needed for PFS rotation), OPENSSL_cleanse on logout/shutdown",
-      "File chunk AAD: FILE_CHUNK bound via GCM AAD='FILE|transfer_id|chunk_index' in FileSender, FileReceiver and server relay",
-      "TOFU (TrustStore.h/.cpp): known_hosts in profile dir (JSON, 0600, atomic write), states UNVERIFIED/KNOWN/VERIFIED/MISMATCH, comparison by full SHA-3-256 (short fingerprint is display-only); client keys peers by srv:host:port (full key-change detection, fail-closed BEFORE KEM encaps), server recognizes returning clients by key (cli:fingerprint); MISMATCH never overwrites the stored entry (explicit Remove required); corrupted known_hosts = hard error; UI: PEER TRUST section in handshake panel + MARK AS VERIFIED, Tools > Trusted Peers window (Verify/Remove)",
-      "CryptoManager: full PQC handshake (client+server), TOFU, HKDF and identity in one UI-free layer (quill_core static lib); ChatApp::do_*_handshake are thin wrappers (logs + visualizer via StepCallback); TofuMismatchError carries expected/received fingerprints; security invariants (verify before encaps/decaps, fail-closed TOFU, secret cleanse) enforced in the crypto layer",
-      "Google Test suite (tests/, 87 tests): RFC 5869 vectors, Argon2, AES-GCM tamper + AAD (roundtrip, wrong/missing/unexpected AAD, seq-bound replay), Kyber+Dilithium all levels, identity (QID1/QID2, wrong pass, migration, perms, corruption), profiles (path traversal), TrustStore (full TOFU cycle + key-change attack), MessageFormat, FileTransfer (corrupted/missing chunk, bad hash), integration handshake over socketpair incl. MITM-block and tampered-ciphertext rejection",
-      "QID1 hardening: SHA-3-256 checksum appended to plaintext key files (deterministic corruption detection; sign/verify self-test alone did not catch every byte flip in ML-DSA sk)",
-      "File transfer: 64KB chunking, AES-256-GCM per chunk, SHA-3-256 integrity check (FileSender/FileReceiver)",
-      "File transfer UI: file picker (portable-file-dialogs), progress bars, download directory"
+      "HKDF-SHA256 session key derivation (salt = kyber_pub||ct, domain-separated info, RFC 5869 verified)",
+      "Identity management: persistent ML-DSA/Falcon keys, 0600/0700 perms, atomic write, SHA-3 fingerprint",
+      "Profiles + login: ProfileManager, QID2 (Argon2id + AES-GCM), QID1 migration, passphrase min 8 chars",
+      "Argon2 dual backend: OpenSSL >= 3.2 EVP_KDF or libargon2 on older distros (Ubuntu CI)",
+      "TOFU (TrustStore): known_hosts, UNVERIFIED/KNOWN/VERIFIED/MISMATCH, fail-closed on key change",
+      "CryptoManager: UI-free handshake + TOFU + HKDF + identity (quill_core)",
+      "File transfer: 64KB chunks, AES-GCM per chunk, AAD FILE|tid|index, chunk_hash SHA-3 per chunk, SHA-3 whole file in FILE_END",
+      "File transfer: selective repeat (FILE_NACK, max 5 rounds, FileSenderSession retransmit with new nonce)",
+      "File transfer UI: file picker, progress bars, download directory",
+      "ImGui git submodule (third_party/imgui v1.92.8)",
+      "GitHub Actions CI: build quill_core + ctest (QUILL_BUILD_GUI=OFF)",
+      "Google Test suite (tests/, 97 tests)"
     ],
     "not_done": [
-      "File transfer improvements: selective repeat retransmission, per-chunk SHA-3",
       "NAT Traversal: UDP hole punching + rendezvous server",
-      "Passphrase strength policy (min length / entropy) for new profiles"
+      "Engineering thesis: intelligent PQC algorithm selection",
+      "Optional: Docker (build+test only), ASan/UBSan in CI, true E2E (hub redesign)"
     ],
-    "note": "Everything declared as DONE in Quill_Prezentacja.pptx now exists in code (file transfer, identity, TOFU, HKDF, CryptoManager, unit tests). Remaining items above were marked as 'planned' on the slides."
+    "note": "Feature-complete for semester project (v1.0.0). Everything from Quill_Prezentacja.pptx is implemented."
   },
 
   "stack": {
     "language": "C++23",
     "build_system": "CMake (min 3.20)",
     "crypto_pqc": "liboqs (Open Quantum Safe) — MIT license",
-    "crypto_symmetric": "OpenSSL (Apache 2.0) — AES-256-GCM, SHA-3, RAND_bytes",
+    "crypto_symmetric": "OpenSSL (Apache 2.0) — AES-256-GCM, SHA-3, HKDF, RAND_bytes; Argon2id via EVP_KDF (>=3.2) or libargon2",
     "networking": "POSIX sockets (Linux)",
     "serialization": "nlohmann/json",
-    "ui": "ImGui + GLFW + OpenGL3",
-    "os": "Arch Linux (primary dev), target cross-platform"
+    "ui": "ImGui + GLFW + OpenGL3 (git submodule)",
+    "ci": "GitHub Actions — ubuntu-latest, liboqs built in job",
+    "os": "Arch Linux (primary dev), Ubuntu CI, target cross-platform"
   },
 
   "crypto": {
@@ -87,7 +91,7 @@
     },
     "session_encryption": {
       "algorithm": "AES-256-GCM",
-      "key_derivation": "HKDF-SHA256(ikm=Kyber shared_secret, salt=kyber_pub||kem_ciphertext, info='quill-aes256gcm-session-v1|LEVEL') -> 32B AES key; raw secret cleansed after derivation",
+      "key_derivation": "HKDF-SHA256(ikm=Kyber shared_secret, salt=kyber_pub||kem_ciphertext, info='quill-aes256gcm-session-v1|LEVEL') -> 32B AES key",
       "nonce": "12 bytes, random per message via RAND_bytes — NEVER reuse",
       "tag": "16 bytes GCM auth tag appended to ciphertext"
     },
@@ -101,65 +105,23 @@
   "protocol": {
     "transport": "TCP with length-prefixed framing (uint32_t network byte order)",
     "message_format": {
-      "encoding": "JSON via nlohmann/json (using binary_t for raw bytes)",
-      "types": ["CHAT", "JOIN", "ROOM_LIST", "REQ_LEVEL", "DO_HANDSHAKE", "FILE_START", "FILE_CHUNK", "FILE_END"]
-    }
+      "encoding": "JSON via nlohmann/json (binary arrays for raw bytes)",
+      "types": ["CHAT", "JOIN", "ROOM_LIST", "REQ_LEVEL", "DO_HANDSHAKE", "FILE_START", "FILE_CHUNK", "FILE_END", "FILE_NACK"]
+    },
+    "file_transfer": "FILE_START -> FILE_CHUNK (chunk_hash=SHA3 plaintext, AAD, AES-GCM) -> FILE_END (whole-file SHA3). Missing: FILE_NACK -> selective repeat."
   },
 
   "architecture": {
-    "concurrency": "std::thread per client, std::mutex for shared state (e.g., m_clients_mtx, m_rooms_mtx)",
+    "concurrency": "std::thread per client, std::mutex for shared state; m_security_level under mutex, m_msg_count atomic",
     "directory_tree": {
-      "src/crypto/": {
-        "description": "Cryptographic wrappers and primitives",
-        "files": [
-          "AesGcm.cpp", "AesGcm.h",
-          "crypto.h",
-          "CryptoManager.cpp", "CryptoManager.h",
-          "Hkdf.cpp", "Hkdf.h",
-          "IdentityManager.cpp", "IdentityManager.h",
-          "Argon2.cpp", "Argon2.h",
-          "ProfileManager.cpp", "ProfileManager.h",
-          "TrustStore.cpp", "TrustStore.h",
-          "DilithiumSign.cpp", "DilithiumSign.h",
-          "KyberKEM.cpp", "KyberKEM.h",
-          "SecurityLevel.h"
-        ]
-      },
-      "src/frontend/": {
-        "description": "ImGui based UI, Chat application logic, and rendering",
-        "files": [
-          "ChatApp.cpp", "ChatApp.h",
-          "ChatAppRender.cpp",
-          "Theme.h"
-        ]
-      },
-      "src/network/": {
-        "description": "TCP Sockets, Client and Server object-oriented wrappers",
-        "files": [
-          "network.h",
-          "NetworkClient.cpp", "NetworkClient.h",
-          "NetworkServer.cpp", "NetworkServer.h",
-          "Socket.cpp", "Socket.h"
-        ]
-      },
-      "src/protocol/": {
-        "description": "JSON message formatting, parsing and file transfer",
-        "files": [
-          "MessageFormat.cpp", "MessageFormat.h",
-          "FileTransfer.cpp", "FileTransfer.h"
-        ]
-      },
-      "tests/": "Google Test suite (87 tests) — linked against quill_core static lib (crypto+network+protocol, no UI)",
-      "third_party/": "External dependencies (ImGui, portable-file-dialogs.h)",
-      "root/": {
-        "description": "Entry point and build config",
-        "files": [
-          "CMakeLists.txt",
-          "main.cpp",
-          "current_state.json",
-          "quill_claude_context.json"
-        ]
-      }
+      "src/crypto/": "PQC, KDF, identity, profiles, TOFU, CryptoManager",
+      "src/frontend/": "ChatApp, ChatAppRender, Theme",
+      "src/network/": "Socket, NetworkServer, NetworkClient",
+      "src/protocol/": "MessageFormat, FileTransfer",
+      "tests/": "Google Test (97 tests) — quill_core only",
+      "third_party/": "imgui (submodule), portable-file-dialogs",
+      ".github/workflows/": "ci.yml",
+      "docs/": "OVERVIEW.md"
     }
   },
 
@@ -168,7 +130,7 @@
     "code_language": "C++23",
     "focus": "Security correctness above all else — always flag any crypto misuse",
     "style": "Prefer clear, readable code over clever one-liners — this is academic code",
-    "libs": "Use liboqs for all PQC, OpenSSL for AES/SHA/RAND — do not suggest other crypto libs",
-    "context_awareness": "Always refer to 'architecture.directory_tree' when suggesting where to place new code or refactor existing ones."
+    "libs": "Use liboqs for all PQC, OpenSSL for AES/SHA/RAND/HKDF — Argon2 via OpenSSL or libargon2",
+    "context_awareness": "Always refer to architecture.directory_tree when suggesting where to place new code."
   }
 }

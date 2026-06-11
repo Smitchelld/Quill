@@ -1,7 +1,7 @@
 {
   "project": "Quill - Post-Quantum Encrypted P2P Messenger",
   "status_date": "2026-06-10",
-  "version": "1.0.0-rc2",
+  "version": "1.0.0",
   "current_state": {
     "done": [
       "Obiektowa warstwa sieciowa (Socket, NetworkServer, NetworkClient)",
@@ -30,7 +30,7 @@
       "TOFU UI: sekcja PEER TRUST w panelu handshake (stan + MARK AS VERIFIED), okno Tools > Trusted Peers (lista, Verify, Remove), alert MITM z oboma fingerprintami w logu",
       "CryptoManager: cały PQC handshake (klient+serwer), TOFU, HKDF i tożsamość w jednej warstwie bez zależności od UI; ChatApp::do_*_handshake to cienkie wrappery (logi+visualizer); TofuMismatchError z fingerprintami expected/received; inwarianty (verify przed encaps/decaps, fail-closed TOFU, cleanse) egzekwowane w warstwie krypto",
       "Ochrona przed replay + AAD: AES-256-GCM przyjmuje teraz AAD (opcjonalny, domyślnie pusty = zgodność wsteczna). Wiadomości CHAT mają monotoniczny numer sekwencji per kierunek (klient: m_send_seq/m_recv_seq; serwer: send_seq/recv_seq w ConnectedClient) wiązany przez AAD='CHAT|<seq>'. Odbiorca odrzuca seq<=ostatni (fail-closed); podmiana seq w JSON psuje tag GCM. Liczniki resetowane przy każdym handshake/rotacji PFS (stary szyfrogram i tak nie deszyfruje się nowym kluczem).",
-      "Testy Google Test (tests/, 91 testów): Hkdf (wektory RFC 5869), Argon2, AesGcm (tamper/wrong key/nonce + AAD: roundtrip, zły/brakujący/niespodziewany AAD, wiązanie seq jako anty-replay), KyberKEM i DilithiumSign (wszystkie poziomy), IdentityManager (QID1/QID2, złe hasło, migracja, uprawnienia, korupcja), ProfileManager (path traversal), TrustStore (pełny cykl TOFU + atak), MessageFormat, FileTransfer (uszkodzony/zgubiony chunk, zły hash), CryptoManager (integracyjny handshake przez socketpair, MITM blocked, tampered ciphertext)",
+      "Testy Google Test (tests/, 97 testów): Hkdf (wektory RFC 5869), Argon2, AesGcm (tamper/wrong key/nonce + AAD: roundtrip, zły/brakujący/niespodziewany AAD, wiązanie seq jako anty-replay), KyberKEM i DilithiumSign (wszystkie poziomy), IdentityManager (QID1/QID2, złe hasło, migracja, uprawnienia, korupcja), ProfileManager (path traversal, passphrase policy), TrustStore (pełny cykl TOFU + atak), MessageFormat, FileTransfer (NACK, chunk_hash, korupcja, injection), CryptoManager (integracyjny handshake przez socketpair, MITM blocked, tampered ciphertext)",
       "Wzmocnienie QID1: suma SHA-3-256 payloadu w pliku (deterministyczna detekcja korupcji; sam self-test sign/verify nie łapał każdego przekłamania bajtu w ML-DSA sk)",
       "Bugfix MessageFormat: json::binary nie przeżywa dump()/parse() (tekstowy JSON nie ma typu binarnego) - nonce/payload serializowane teraz jako tablice; bug wykryty przez nowe testy",
       "Sprzątanie martwych połączeń: po rozłączeniu klient usuwany z m_clients i m_rooms (server_client_handler cleanup)",
@@ -39,7 +39,10 @@
       "Wymóg niepustego passphrase przy tworzeniu profilu (ProfileManager::create + walidacja w UI); nowe profile zawsze encrypted=true (QID2)",
       "Siła passphrase: MIN_PASSPHRASE_LEN=8, odrzucenie powtarzającego się jednego znaku (np. aaaaaaaa); walidacja w ProfileManager + UI; unlock bez zmiany polityki (legacy profile)",
       "Selective repeat (FILE_NACK): odbiorca zgłasza brakujące chunk_index, FileSenderSession retransmituje z nowym nonce, try_finalize po uzupełnieniu; max 5 rund NACK; relay serwera przekazuje NACK do nadawcy",
-      "SHA-3 per chunk: FILE_CHUNK zawiera chunk_hash=SHA3-256(plaintext); odbiorca weryfikuje po deszyfracji GCM przed buforowaniem (fail-fast); FILE_END nadal weryfikuje hash całości"
+      "SHA-3 per chunk: FILE_CHUNK zawiera chunk_hash=SHA3-256(plaintext); odbiorca weryfikuje po deszyfracji GCM przed buforowaniem (fail-fast); FILE_END nadal weryfikuje hash całości",
+      "CI GitHub Actions (.github/workflows/ci.yml): build quill_core + ctest na push/PR (QUILL_BUILD_GUI=OFF); liboqs budowany w jobie",
+      "Argon2 dual backend: OpenSSL >= 3.2 (EVP_KDF ARGON2ID) lub libargon2 na starszych dystrybucjach (Ubuntu CI); wykrywane w CMake",
+      "ImGui jako git submodule (third_party/imgui v1.92.8); QUILL_BUILD_GUI=OFF omija GLFW/OpenGL w CI"
     ],
     "in_progress": [],
     "todo": [
@@ -98,7 +101,7 @@
     "file_transfer": "FILE_START -> FILE_CHUNK (64KB, AES-GCM per chunk, AAD FILE|tid|index, chunk_hash=SHA3-256 plaintextu) -> FILE_END (SHA-3-256 całości). Weryfikacja chunk_hash po deszyfracji (przed buforowaniem). Brakujące chunki: FILE_NACK -> selective repeat. Max 5 rund NACK."
   },
   "critical_notes_for_ai": {
-    "compilation": "Wymaga linkowania OpenSSL, liboqs oraz nlohmann_json, GLFW, OpenGL3. Threading z pthread.",
+    "compilation": "Wymaga OpenSSL, liboqs, nlohmann_json; GUI: GLFW, OpenGL3, submodule imgui. OpenSSL < 3.2: dodatkowo libargon2-dev. Threading: pthread. Clone: git clone --recurse-submodules.",
     "security": "PFS (rotacja kluczy) przebiega bez przerywania połączenia TCP (nowy PQC Handshake na żądanie). Klucz sesji przez HKDF-SHA256 z wiązaniem transkryptu - nigdy surowy shared_secret. Wiadomości CHAT chronione przed replay numerami sekwencji wiązanymi przez AAD GCM (fail-closed). Architektura to przekaźnik hub-and-spoke (serwer odszyfrowuje od nadawcy i re-szyfruje per odbiorca własnym kluczem sesji) - NIE end-to-end; serwer widzi plaintext (świadoma decyzja projektowa). Klucze DSA trwałe (profil + passphrase, Argon2id+AES-GCM at rest), Kyber zawsze efemeryczny. Logowanie = lokalne odblokowanie tożsamości, NIE uwierzytelnienie wobec sieci. Do testów dwóch instancji na jednej maszynie wystarczą dwa profile.",
     "levels": "FAST (Kyber512+Falcon512), BALANCED (Kyber768+MLDSA65), MAX (Kyber1024+MLDSA87)."
   }
