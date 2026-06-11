@@ -108,24 +108,192 @@ void ChatApp::do_create_profile(const std::string& name,
     }
 }
 
-void ChatApp::do_logout() {
-    // Wylogowanie tylko gdy nie ma aktywnej sesji sieciowej —
-    // klucze sa potrzebne do rotacji PFS w trakcie polaczenia
-    if (m_mode != AppMode::NONE) return;
-    ProfileManager::logout();
-    m_logged_in = false;
-    m_profile_name.clear();
-    m_my_fingerprint.clear();
-    m_profiles_dirty = true;
-    m_selected_profile = -1;
+void ChatApp::disconnect_session() {
+    m_connected = false;
+    if (m_client) {
+        m_client->close_socket();
+        m_client.reset();
+    }
+    if (m_server) {
+        m_server->close_socket();
+        m_server.reset();
+    }
+    {
+        std::lock_guard lk(m_clients_mtx);
+        for (auto& c : m_clients)
+            if (c.sock) c.sock->close_socket();
+        m_clients.clear();
+    }
+    {
+        std::lock_guard lk(m_rooms_mtx);
+        m_rooms.clear();
+        m_rooms["general"] = {};
+        m_room_logs.clear();
+        m_room_logs["general"] = {};
+        m_current_room = "general";
+    }
+    m_room_protected.clear();
+    m_pending_join_room.clear();
+    OPENSSL_cleanse(m_join_room_pass_buf, sizeof(m_join_room_pass_buf));
+    m_mode = AppMode::NONE;
+    m_send_seq = 0;
+    m_recv_seq = 0;
+    {
+        std::lock_guard lk(m_session_mtx);
+        if (!m_session_key.empty())
+            OPENSSL_cleanse(m_session_key.data(), m_session_key.size());
+        m_session_key.clear();
+    }
     {
         std::lock_guard lk(m_trust_mtx);
         m_has_peer_trust = false;
         m_peer_id.clear();
         m_peer_fp.clear();
     }
+    hs_clear();
+}
+
+void ChatApp::do_logout() {
+    disconnect_session();
+    ProfileManager::logout();
+    m_logged_in = false;
+    m_profile_name.clear();
+    m_my_fingerprint.clear();
+    m_profiles_dirty = true;
+    m_selected_profile = -1;
     m_trust_list_dirty = true;
+    m_delete_modal_open = false;
     cleanse_login_buffers();
+    OPENSSL_cleanse(m_delete_pass_buf, sizeof(m_delete_pass_buf));
+}
+
+void ChatApp::do_delete_profile(const std::string& passphrase) {
+    try {
+        std::string name = m_profile_name;
+        disconnect_session();
+        ProfileManager::remove(name, passphrase);
+        m_logged_in = false;
+        m_profile_name.clear();
+        m_my_fingerprint.clear();
+        m_profiles_dirty = true;
+        m_selected_profile = -1;
+        m_delete_modal_open = false;
+        cleanse_login_buffers();
+        OPENSSL_cleanse(m_delete_pass_buf, sizeof(m_delete_pass_buf));
+        m_login_info = "Profil '" + name + "' usuniety.";
+        m_login_error.clear();
+    } catch (const std::exception& e) {
+        m_login_error = e.what();
+    }
+}
+
+void ChatApp::submit_new_room() {
+    if (m_new_room_buf[0] == '\0') return;
+    std::string r(m_new_room_buf);
+    std::string pass(m_new_room_pass_buf);
+
+    {
+        std::lock_guard lk(m_rooms_mtx);
+        if (m_rooms.count(r)) {
+            log("[ROOM] Pokoj #" + r + " juz istnieje.", Theme::red(), m_current_room);
+            return;
+        }
+    }
+
+    if (m_mode == AppMode::SERVER) {
+        if (!create_room(r, pass))
+            log("[ROOM] Pokoj #" + r + " juz istnieje.", Theme::red(), m_current_room);
+    } else if (m_mode == AppMode::CLIENT && m_connected && m_client) {
+        if (!pass.empty()) {
+            json j;
+            j["type"]     = "CREATE_ROOM";
+            j["room"]     = r;
+            j["password"] = pass;
+            client_send(j.dump());
+        }
+        join_room(r, pass);
+    }
+    m_new_room_buf[0] = '\0';
+    OPENSSL_cleanse(m_new_room_pass_buf, sizeof(m_new_room_pass_buf));
+}
+
+void ChatApp::apply_server_security_level(const std::string& level) {
+    if (m_mode != AppMode::SERVER) return;
+    set_security_level(level);
+
+    // Rotacja musi przebiegac w watku handlera klienta (nie w UI) — inaczej
+    // deadlock na socketcie i zawieszenie serwera.
+    {
+        std::lock_guard lk(m_clients_mtx);
+        for (auto& c : m_clients) {
+            if (c.sock) {
+                c.pending_pfs_level    = level;
+                c.pending_pfs_rotation = true;
+            }
+        }
+    }
+    log("[SYSTEM] Zmiana poziomu PQC na " + level +
+        " — re-handshake klientow w toku...", Theme::yellow(), m_current_room);
+}
+
+void ChatApp::load_persisted_rooms() {
+    try {
+        for (const auto& r : RoomStore::list()) {
+            std::lock_guard lk(m_rooms_mtx);
+            m_rooms[r.name] = {};
+            if (m_room_logs.find(r.name) == m_room_logs.end())
+                m_room_logs[r.name] = {};
+            m_room_protected[r.name] = r.password_protected;
+        }
+    } catch (const std::exception& e) {
+        log(std::string("[ROOM] ") + e.what(), Theme::red(), "general");
+    }
+}
+
+void ChatApp::broadcast_room_list() {
+    if (m_mode != AppMode::SERVER) return;
+
+    json rl;
+    rl["type"] = "ROOM_LIST";
+    json rooms = json::array();
+    {
+        std::lock_guard lk(m_rooms_mtx);
+        for (const auto& [name, _] : m_rooms) {
+            json r;
+            r["name"] = name;
+            bool prot = false;
+            try { prot = RoomStore::is_protected(name); } catch (...) {}
+            r["protected"] = prot;
+            m_room_protected[name] = prot;
+            rooms.push_back(std::move(r));
+        }
+    }
+    rl["rooms"] = rooms;
+    std::string s = rl.dump();
+    Bytes data(s.begin(), s.end());
+
+    std::lock_guard lk(m_clients_mtx);
+    for (auto& c : m_clients) {
+        if (c.sock) c.sock->send_bytes(data);
+    }
+}
+
+void ChatApp::client_send(const Bytes& data) {
+    if (!m_client) return;
+    std::lock_guard lk(m_client_send_mtx);
+    m_client->send_bytes(data);
+}
+
+void ChatApp::client_send(const std::string& s) {
+    client_send(Bytes(s.begin(), s.end()));
+}
+
+void ChatApp::send_display_name() {
+    if (!m_client || !m_connected) return;
+    json j;
+    j["type"]         = "SET_DISPLAY_NAME";
+    j["display_name"] = m_profile_name;
+    client_send(j.dump());
 }
 
 // ── HELPERY ───────────────────────────────────────────────────────
@@ -179,9 +347,13 @@ void ChatApp::broadcast_raw_to_room(const std::string& room,
 
 // ── HANDSHAKE (cienkie wrappery — cała kryptografia w CryptoManager) ──
 
-Bytes ChatApp::do_client_handshake(Socket& sock, const std::string& level) {
-    hs_clear();
-    log("=== HANDSHAKE START (CLIENT) | " + level + " ===", Theme::yellow(), m_current_room);
+Bytes ChatApp::do_client_handshake(Socket& sock, const std::string& level,
+                                   bool server_rehandshake) {
+    if (!server_rehandshake) {
+        hs_clear();
+        log("=== HANDSHAKE START (CLIENT) | " + level + " ===",
+            Theme::yellow(), m_current_room);
+    }
 
     std::string peer_id = "srv:" + std::string(m_host_buf) + ":" + std::to_string(m_port);
     CryptoManager cm(level);
@@ -189,7 +361,8 @@ Bytes ChatApp::do_client_handshake(Socket& sock, const std::string& level) {
     HandshakeResult res;
     try {
         res = cm.client_handshake(sock, peer_id,
-            [this](const std::string& label, double t) { hs_step(label, t); });
+            [this](const std::string& label, double t) { hs_step(label, t); },
+            server_rehandshake);
     } catch (const TofuMismatchError& e) {
         log("!!! SERVER KEY CHANGED — POSSIBLE MITM !!!", Theme::red(), m_current_room);
         log("  expected: " + e.expected_fp, Theme::red(), m_current_room);
@@ -236,48 +409,116 @@ Bytes ChatApp::do_server_handshake(Socket& sock, const std::string& level) {
 
 // ── POKOJE ────────────────────────────────────────────────────────
 
-void ChatApp::create_room(const std::string& room) {
-    bool is_new = false;
+bool ChatApp::create_room(const std::string& room, const std::string& password) {
     {
         std::lock_guard lk(m_rooms_mtx);
-        if (m_rooms.find(room) == m_rooms.end()) {
-            m_rooms[room] = {};
-            m_room_logs[room] = {};
-            is_new = true;
-        }
+        if (m_rooms.count(room))
+            return false;
+    }
+    if (m_mode == AppMode::SERVER && RoomStore::exists(room))
+        return false;
+
+    {
+        std::lock_guard lk(m_rooms_mtx);
+        m_rooms[room] = {};
+        m_room_logs[room] = {};
     }
 
-    // Jeśli to nowy pokój i jesteśmy serwerem - wysyłamy aktualizację do wszystkich
-    if (is_new) {
+    if (m_mode == AppMode::SERVER) {
+        try {
+            RoomStore::add(room, password);
+            m_room_protected[room] = !password.empty();
+        } catch (const std::exception& e) {
+            std::lock_guard lk(m_rooms_mtx);
+            m_rooms.erase(room);
+            m_room_logs.erase(room);
+            log(std::string("[ROOM] ") + e.what(), Theme::red(), "general");
+            return false;
+        }
+        log("[*] Room #" + room + " created." +
+            (password.empty() ? "" : " (chroniony haslem)"),
+            Theme::yellow(), "general");
+        broadcast_room_list();
+    } else {
         log("[*] Room #" + room + " created.", Theme::yellow(), "general");
-
-        if (m_mode == AppMode::SERVER) {
-            json j;
-            j["type"] = "ROOM_LIST";
-            std::vector<std::string> r_list;
-            {
-                std::lock_guard lk(m_rooms_mtx);
-                for(auto& kv : m_rooms) r_list.push_back(kv.first);
-            }
-            j["rooms"] = r_list;
-            std::string s = j.dump();
-            Bytes data(s.begin(), s.end());
-
-            std::lock_guard lk(m_clients_mtx);
-            for (auto& c : m_clients) {
-                if (c.sock) c.sock->send_bytes(data);
-            }
-        }
     }
+    return true;
 }
 
-void ChatApp::join_room(const std::string& room) {
-    json j;
-    j["type"] = "JOIN";
-    j["room"] = room;
-    std::string s = j.dump();
-    if (m_client) {
-        m_client->send_bytes(Bytes(s.begin(), s.end()));
+void ChatApp::delete_room(const std::string& room) {
+    if (room == "general") {
+        log("[ROOM] Nie mozna usunac pokoju #general.", Theme::red(), m_current_room);
+        return;
+    }
+    {
+        std::lock_guard lk(m_rooms_mtx);
+        if (!m_rooms.count(room)) {
+            log("[ROOM] Pokoj #" + room + " nie istnieje.", Theme::red(), m_current_room);
+            return;
+        }
+    }
+
+    if (m_mode == AppMode::SERVER) {
+        try {
+            RoomStore::remove(room);
+        } catch (const std::exception& e) {
+            log(std::string("[ROOM] ") + e.what(), Theme::red(), m_current_room);
+            return;
+        }
+    }
+
+    {
+        std::lock_guard lk(m_rooms_mtx);
+        m_rooms.erase(room);
+        m_room_protected.erase(room);
+    }
+
+    if (m_mode == AppMode::SERVER) {
+        json ev;
+        ev["type"] = "ROOM_DELETED";
+        ev["room"] = room;
+        std::string evs = ev.dump();
+        Bytes evb(evs.begin(), evs.end());
+
+        std::lock_guard lk(m_clients_mtx);
+        for (auto& c : m_clients) {
+            if (c.room == room) {
+                c.room = "general";
+                if (c.sock) c.sock->send_bytes(evb);
+            }
+        }
+        broadcast_room_list();
+    }
+
+    if (m_current_room == room)
+        m_current_room = "general";
+
+    log("[ROOM] Usunieto pokoj #" + room + ".", Theme::yellow(), "general");
+}
+
+void ChatApp::join_room(const std::string& room, const std::string& password) {
+    if (m_mode == AppMode::CLIENT && m_connected && m_client) {
+        bool need_pass = false;
+        auto it = m_room_protected.find(room);
+        if (it != m_room_protected.end())
+            need_pass = it->second;
+        if (need_pass && password.empty()) {
+            m_pending_join_room = room;
+            return;
+        }
+        json j;
+        j["type"] = "JOIN";
+        j["room"] = room;
+        if (!password.empty())
+            j["password"] = password;
+        client_send(j.dump());
+        m_current_room = room;
+        m_pending_join_room.clear();
+        OPENSSL_cleanse(m_join_room_pass_buf, sizeof(m_join_room_pass_buf));
+        std::lock_guard lk(m_log_mtx);
+        if (m_room_logs.find(room) == m_room_logs.end())
+            m_room_logs[room] = {};
+    } else if (m_mode == AppMode::SERVER) {
         m_current_room = room;
         std::lock_guard lk(m_log_mtx);
         if (m_room_logs.find(room) == m_room_logs.end())
@@ -334,7 +575,8 @@ void ChatApp::perform_pfs_rotation(std::shared_ptr<Socket> sock,
             }
         }
     }
-    log("[SYSTEM] PFS key rotated.", Theme::yellow(), room);
+    log("[SYSTEM] Klucz sesji odswiezony (PQC " + level + ").",
+        Theme::yellow(), room);
 }
 
 void ChatApp::request_pfs_rotation(const std::string& room) {
@@ -345,11 +587,14 @@ void ChatApp::request_pfs_rotation(const std::string& room) {
     }
 }
 
-bool ChatApp::take_pending_pfs_rotation(const std::shared_ptr<Socket>& sock) {
+bool ChatApp::take_pending_pfs_rotation(const std::shared_ptr<Socket>& sock,
+                                        std::string& out_level) {
     std::lock_guard lk(m_clients_mtx);
     for (auto& c : m_clients) {
         if (c.sock == sock && c.pending_pfs_rotation) {
             c.pending_pfs_rotation = false;
+            out_level = c.pending_pfs_level.empty() ? security_level() : c.pending_pfs_level;
+            c.pending_pfs_level.clear();
             return true;
         }
     }
@@ -378,17 +623,16 @@ void ChatApp::send_chat_msg(const std::string& text) {
         j["seq"]     = seq;
         j["nonce"]   = enc.nonce;
         j["payload"] = enc.ciphertext;
-        j["sender"]  = "Client";
+        j["sender"]  = m_profile_name;
         j["room"]    = m_current_room;
 
-        std::string s = j.dump();
-        m_client->send_bytes(Bytes(s.begin(), s.end()));
+        client_send(j.dump());
 
         log("[YOU]: " + text, Theme::primary(), m_current_room);
         m_msg_count++;
     }
     else if (m_mode == AppMode::SERVER) {
-        std::string msg = "[SERVER]: " + text;
+        std::string msg = "[" + m_profile_name + "]: " + text;
         broadcast_to_room(m_current_room, msg);
         log(msg, Theme::yellow(), m_current_room);
         m_msg_count++;
@@ -407,8 +651,10 @@ void ChatApp::start_server() {
         m_server    = std::make_unique<NetworkServer>(m_port);
         m_mode      = AppMode::SERVER;
         m_connected = true;
+        load_persisted_rooms();
         create_room("general");
-        log("QuantumShield Server ONLINE", Theme::green(), "general");
+        log("QuantumShield Server ONLINE (host: " + m_profile_name + ")",
+            Theme::green(), "general");
 
         std::thread([this]() {
             int id = 1;
@@ -426,11 +672,18 @@ void ChatApp::start_server() {
 }
 
 void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
-    std::string name = "Client_" + std::to_string(id);
+    (void)id;
+    std::string name = "...";
     std::string room = "general";
 
     try {
-        // Handshake musi wykonywać się BEZ blokowania głównego m_clients_mtx
+        // Poziom PQC ustala serwer — klient dostaje go przed handshake
+        json cfg;
+        cfg["type"]  = "SERVER_CONFIG";
+        cfg["level"] = security_level();
+        std::string cs = cfg.dump();
+        sock->send_bytes(Bytes(cs.begin(), cs.end()));
+
         Bytes key = do_server_handshake(*sock, security_level());
 
         {
@@ -441,27 +694,35 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
             std::lock_guard lk(m_rooms_mtx);
             m_rooms[room].insert(name);
         }
-        log("[+] " + name + " connected.", Theme::green(), room);
+        log("[+] Klient polaczony (oczekiwanie na nick...).", Theme::green(), room);
 
-        // Wyślij klientowi listę pokojów zaraz po udanym połączeniu
+        // Lista pokojow (z flaga protected)
         {
             json rl;
             rl["type"] = "ROOM_LIST";
-            std::vector<std::string> r_list;
+            json rooms = json::array();
             {
                 std::lock_guard lk(m_rooms_mtx);
-                for(auto& kv : m_rooms) r_list.push_back(kv.first);
+                for (const auto& [rname, _] : m_rooms) {
+                    json r;
+                    r["name"] = rname;
+                    bool prot = false;
+                    try { prot = RoomStore::is_protected(rname); } catch (...) {}
+                    r["protected"] = prot;
+                    rooms.push_back(std::move(r));
+                }
             }
-            rl["rooms"] = r_list;
+            rl["rooms"] = rooms;
             std::string s = rl.dump();
             sock->send_bytes(Bytes(s.begin(), s.end()));
         }
 
         while (m_connected) {
             // Rotacja PFS inicjowana przez serwer (auto co N wiadomości) — tylko w tym wątku
-            if (take_pending_pfs_rotation(sock)) {
+            std::string pfs_level;
+            if (take_pending_pfs_rotation(sock, pfs_level)) {
                 try {
-                    perform_pfs_rotation(sock, security_level());
+                    perform_pfs_rotation(sock, pfs_level);
                 } catch (const std::exception& e) {
                     log(std::string("PFS rotation failed: ") + e.what(),
                         Theme::red(), room);
@@ -484,17 +745,65 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                 auto j = json::parse(data.begin(), data.end());
                 std::string type = j["type"];
 
-                if (type == "REQ_LEVEL") {
-                    perform_pfs_rotation(sock, j["level"]);
+                if (type == "REQ_LEVEL" || type == "REQ_PFS") {
+                    // Klient moze prosic o rotacje PFS; poziom zawsze z serwera
+                    perform_pfs_rotation(sock, security_level());
+                    continue;
+                }
+
+                if (type == "SET_DISPLAY_NAME") {
+                    std::string new_name = j.value("display_name", "");
+                    if (new_name.empty() || new_name.size() > 32) continue;
+                    std::string old_name = name;
+                    name = new_name;
+                    {
+                        std::lock_guard lk(m_rooms_mtx);
+                        if (old_name != "...") m_rooms[room].erase(old_name);
+                        m_rooms[room].insert(name);
+                    }
+                    {
+                        std::lock_guard lk(m_clients_mtx);
+                        for (auto& c : m_clients) if (c.sock == sock) c.name = name;
+                    }
+                    log("[+] " + name + " dolaczyl.", Theme::green(), room);
+                    continue;
+                }
+
+                if (type == "CREATE_ROOM") {
+                    std::string new_room = j["room"];
+                    std::string pass     = j.value("password", "");
+                    json reply;
+                    if (create_room(new_room, pass)) {
+                        reply["type"] = "ROOM_CREATED";
+                        reply["room"] = new_room;
+                    } else {
+                        reply["type"] = "ROOM_EXISTS";
+                        reply["room"] = new_room;
+                    }
+                    std::string os = reply.dump();
+                    sock->send_bytes(Bytes(os.begin(), os.end()));
                     continue;
                 }
 
                 if (type == "JOIN") {
                     std::string new_room = j["room"];
-                    create_room(new_room);
+                    std::string pass     = j.value("password", "");
+                    if (!RoomStore::exists(new_room))
+                        create_room(new_room, "");
+                    if (RoomStore::is_protected(new_room) &&
+                        !RoomStore::verify_password(new_room, pass)) {
+                        json deny;
+                        deny["type"] = "JOIN_DENIED";
+                        deny["room"] = new_room;
+                        std::string ds = deny.dump();
+                        sock->send_bytes(Bytes(ds.begin(), ds.end()));
+                        log("[!] " + name + " — zle haslo do #" + new_room,
+                            Theme::red(), room);
+                        continue;
+                    }
                     {
                         std::lock_guard lk(m_rooms_mtx);
-                        m_rooms[room].erase(name);
+                        if (name != "...") m_rooms[room].erase(name);
                         m_rooms[new_room].insert(name);
                     }
                     {
@@ -502,6 +811,7 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                         for (auto& c : m_clients) if (c.sock == sock) c.room = new_room;
                     }
                     room = new_room;
+                    log("[*] " + name + " -> #" + new_room, Theme::yellow(), room);
                     continue;
                 }
 
@@ -695,11 +1005,20 @@ void ChatApp::start_client() {
             m_client = std::make_unique<NetworkClient>();
             m_client->connect_to(m_host_buf, m_port);
 
+            auto cfg_data = m_client->receive_bytes();
+            auto cfg      = json::parse(cfg_data.begin(), cfg_data.end());
+            if (cfg.value("type", "") == "SERVER_CONFIG") {
+                std::string srv_level = cfg.at("level").get<std::string>();
+                set_security_level(srv_level);
+                log("Poziom serwera: " + srv_level, Theme::blue_text(), m_current_room);
+            }
+
             Bytes key = do_client_handshake(*m_client, security_level());
             { std::lock_guard lk(m_session_mtx); m_session_key = key; }
             m_send_seq = 0; m_recv_seq = 0;  // świeży licznik dla nowej sesji
 
             m_connected = true;
+            send_display_name();
             log("PQC Secure Tunnel Established", Theme::green(), m_current_room);
 
             while (m_connected) {
@@ -715,21 +1034,73 @@ void ChatApp::start_client() {
                     std::string type = j["type"];
 
                     if (type == "ROOM_LIST") {
-                        std::vector<std::string> r_list = j["rooms"];
                         std::lock_guard lk(m_rooms_mtx);
-                        for (const auto& r : r_list) {
-                            if (m_rooms.find(r) == m_rooms.end()) {
-                                m_rooms[r] = {};
-                                m_room_logs[r] = {};
+                        for (const auto& entry : j["rooms"]) {
+                            std::string rname;
+                            bool prot = false;
+                            if (entry.is_string()) {
+                                rname = entry.get<std::string>();
+                            } else {
+                                rname = entry.at("name").get<std::string>();
+                                prot  = entry.value("protected", false);
                             }
+                            if (m_rooms.find(rname) == m_rooms.end()) {
+                                m_rooms[rname] = {};
+                                m_room_logs[rname] = {};
+                            }
+                            m_room_protected[rname] = prot;
                         }
                         continue;
                     }
 
+                    if (type == "JOIN_DENIED") {
+                        std::string denied = j.value("room", "?");
+                        log("[!] Odmowa dolaczenia do #" + denied +
+                            " (zle haslo?)", Theme::red(), m_current_room);
+                        continue;
+                    }
+
                     if (type == "DO_HANDSHAKE") {
-                        Bytes new_key = do_client_handshake(*m_client, j["level"]);
-                        { std::lock_guard lk(m_session_mtx); m_session_key = new_key; }
-                        m_send_seq = 0; m_recv_seq = 0;  // reset po rotacji PFS
+                        std::string lvl = j.at("level").get<std::string>();
+                        set_security_level(lvl);
+                        try {
+                            Bytes new_key = do_client_handshake(*m_client, lvl, true);
+                            { std::lock_guard lk(m_session_mtx); m_session_key = new_key; }
+                            m_send_seq = 0; m_recv_seq = 0;
+                            log("[SYSTEM] Nowy klucz sesji (PQC " + lvl + ")",
+                                Theme::yellow(), m_current_room);
+                        } catch (const std::exception& e) {
+                            log(std::string("[SYSTEM] Re-handshake failed: ") + e.what(),
+                                Theme::red(), m_current_room);
+                        }
+                        continue;
+                    }
+
+                    if (type == "ROOM_CREATED") {
+                        std::string rname = j.value("room", "");
+                        log("[*] Pokoj #" + rname + " utworzony na serwerze.",
+                            Theme::green(), m_current_room);
+                        continue;
+                    }
+
+                    if (type == "ROOM_EXISTS") {
+                        std::string rname = j.value("room", "?");
+                        log("[ROOM] Pokoj #" + rname + " juz istnieje.",
+                            Theme::red(), m_current_room);
+                        continue;
+                    }
+
+                    if (type == "ROOM_DELETED") {
+                        std::string rname = j.value("room", "");
+                        {
+                            std::lock_guard lk(m_rooms_mtx);
+                            m_rooms.erase(rname);
+                            m_room_protected.erase(rname);
+                        }
+                        if (m_current_room == rname)
+                            m_current_room = "general";
+                        log("[ROOM] Pokoj #" + rname + " zostal usuniety.",
+                            Theme::yellow(), m_current_room);
                         continue;
                     }
 
@@ -932,8 +1303,7 @@ void ChatApp::retain_outbound_session(FileSenderSession session) {
 
 void ChatApp::send_file_nack(const json& nack) {
     if (!m_connected || !m_client) return;
-    std::string s = nack.dump();
-    m_client->send_bytes(Bytes(s.begin(), s.end()));
+    client_send(nack.dump());
 }
 
 void ChatApp::handle_outbound_nack(const json& j) {
@@ -947,7 +1317,7 @@ void ChatApp::handle_outbound_nack(const json& j) {
 
     auto send_cb = [this](const std::string& pkt) -> bool {
         if (!m_connected || !m_client) return false;
-        m_client->send_bytes(Bytes(pkt.begin(), pkt.end()));
+        client_send(pkt);
         return true;
     };
 
@@ -983,33 +1353,91 @@ void ChatApp::try_complete_incoming_file(const std::string& transfer_id,
 void ChatApp::send_file(const std::filesystem::path& file_path) {
     if (!m_connected || m_mode != AppMode::CLIENT) return;
 
+    constexpr uintmax_t kMaxFileBytes = 100u * 1024u * 1024u;
+    std::error_code ec;
+    const auto fsize = std::filesystem::file_size(file_path, ec);
+    if (ec) {
+        log("[FILE] Nie mozna odczytac rozmiaru pliku.", Theme::red(), m_current_room);
+        return;
+    }
+    if (fsize > kMaxFileBytes) {
+        log("[FILE] Plik za duzy (max 100 MB).", Theme::red(), m_current_room);
+        return;
+    }
+
     Bytes key_copy;
     { std::lock_guard lk(m_session_mtx); key_copy = m_session_key; }
 
-    std::string sender = "me";
+    std::string sender = m_profile_name;
+    std::string room   = m_current_room;
 
-    std::thread([this, file_path, key_copy, sender]() {
+    std::thread([this, file_path, key_copy, sender, room]() {
+        std::string tid;
         try {
             FileSenderSession session =
                 FileSenderSession::open(file_path, key_copy, sender);
 
+            tid = session.transfer_id();
+            const uint32_t total = session.total_chunks();
+            const std::string fname = file_path.filename().string();
+
+            {
+                std::lock_guard lk(m_file_progress_mtx);
+                m_file_progress[tid] = {fname, 0, total, false, false, ""};
+            }
+            log("[FILE] Wysylanie: " + fname + " (" +
+                std::to_string(total) + " chunkow)", Theme::yellow(), room);
+
             auto send_cb = [this](const std::string& pkt) -> bool {
                 if (!m_connected || !m_client) return false;
-                m_client->send_bytes(Bytes(pkt.begin(), pkt.end()));
+                client_send(pkt);
                 return true;
             };
 
-            bool ok = session.send_all(send_cb);
+            bool ok = session.send_start(send_cb);
+            for (uint32_t i = 0; ok && i < total; ++i) {
+                ok = session.send_chunk(i, send_cb);
+                {
+                    std::lock_guard lk(m_file_progress_mtx);
+                    auto it = m_file_progress.find(tid);
+                    if (it != m_file_progress.end())
+                        it->second.received = i + 1;
+                }
+                if ((i + 1) % 8 == 0)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            if (ok)
+                ok = session.send_end(send_cb);
+
             retain_outbound_session(std::move(session));
 
+            {
+                std::lock_guard lk(m_file_progress_mtx);
+                auto it = m_file_progress.find(tid);
+                if (it != m_file_progress.end()) {
+                    it->second.done = true;
+                    it->second.ok   = ok;
+                    if (!ok)
+                        it->second.error_msg = "Polaczenie przerwane podczas wysylania";
+                }
+            }
+
             if (ok)
-                log("[FILE] Wysłano: " + file_path.filename().string(),
-                    Theme::green(), m_current_room);
+                log("[FILE] Wyslano: " + fname, Theme::green(), room);
             else
-                log("[FILE] Transfer przerwany.", Theme::yellow(), m_current_room);
+                log("[FILE] Transfer przerwany.", Theme::yellow(), room);
 
         } catch (const std::exception& e) {
-            log(std::string("[FILE] Błąd wysyłania: ") + e.what(), Theme::red(), m_current_room);
+            if (!tid.empty()) {
+                std::lock_guard lk(m_file_progress_mtx);
+                auto it = m_file_progress.find(tid);
+                if (it != m_file_progress.end()) {
+                    it->second.done = true;
+                    it->second.ok   = false;
+                    it->second.error_msg = e.what();
+                }
+            }
+            log(std::string("[FILE] Blad wysylania: ") + e.what(), Theme::red(), room);
         }
     }).detach();
 }

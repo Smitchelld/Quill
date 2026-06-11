@@ -1,5 +1,6 @@
 #include "ProfileManager.h"
 #include "IdentityManager.h"
+#include "RoomStore.h"
 
 #include <nlohmann/json.hpp>
 #include <sys/stat.h>
@@ -7,11 +8,55 @@
 #include <cstdlib>
 #include <fstream>
 #include <stdexcept>
+#include <signal.h>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 static constexpr size_t MAX_NAME_LEN = 32;
+static fs::path g_active_dir;
+
+static fs::path session_lock_path(const fs::path& profile_dir) {
+    return profile_dir / ".session.lock";
+}
+
+static bool pid_alive(pid_t pid) {
+    if (pid <= 0) return false;
+    return ::kill(pid, 0) == 0;
+}
+
+static void acquire_session_lock(const fs::path& profile_dir) {
+    fs::path lock = session_lock_path(profile_dir);
+    if (fs::exists(lock)) {
+        std::ifstream f(lock);
+        pid_t other = 0;
+        f >> other;
+        if (other == ::getpid())
+            return; // ta sama instancja (np. create -> unlock w teście)
+        if (pid_alive(other))
+            throw std::runtime_error(
+                "Profil jest juz zalogowany w innej instancji Quill (PID " +
+                std::to_string(other) + ")");
+        fs::remove(lock);
+    }
+    std::ofstream f(lock, std::ios::trunc);
+    if (!f)
+        throw std::runtime_error("Profil: nie mozna utworzyc blokady sesji");
+    f << ::getpid();
+    ::chmod(lock.c_str(), 0600);
+}
+
+static void release_session_lock(const fs::path& profile_dir) {
+    if (profile_dir.empty()) return;
+    fs::path lock = session_lock_path(profile_dir);
+    if (!fs::exists(lock)) return;
+    std::ifstream f(lock);
+    pid_t stored = 0;
+    f >> stored;
+    if (stored == ::getpid() || stored == 0)
+        fs::remove(lock);
+}
 
 // Nazwa profilu jest nazwą katalogu — whitelist zamiast escapowania
 static void validate_name(const std::string& name) {
@@ -118,6 +163,9 @@ ProfileInfo ProfileManager::create(const std::string& name, const std::string& p
         info.encrypted   = true;
         info.dir         = dir;
         write_meta(info);
+        acquire_session_lock(dir);
+        g_active_dir = dir;
+        RoomStore::activate(dir);
         return info;
     } catch (...) {
         IdentityManager::deactivate();
@@ -142,6 +190,9 @@ ProfileInfo ProfileManager::unlock(const std::string& name, const std::string& p
             info.fingerprint = fp;
             write_meta(info);
         }
+        acquire_session_lock(dir);
+        g_active_dir = dir;
+        RoomStore::activate(dir);
         return info;
     } catch (...) {
         IdentityManager::deactivate(); // nieudane logowanie nie zostawia stanu
@@ -150,5 +201,36 @@ ProfileInfo ProfileManager::unlock(const std::string& name, const std::string& p
 }
 
 void ProfileManager::logout() {
+    release_session_lock(g_active_dir);
+    RoomStore::deactivate();
+    g_active_dir.clear();
     IdentityManager::deactivate();
+}
+
+void ProfileManager::remove(const std::string& name, const std::string& passphrase) {
+    validate_name(name);
+    fs::path dir = profiles_root() / name;
+    if (!fs::exists(dir))
+        throw std::runtime_error("Profil '" + name + "' nie istnieje");
+
+    bool was_active = (!g_active_dir.empty() && fs::equivalent(g_active_dir, dir));
+
+    IdentityManager::activate(dir / "identity", passphrase);
+    try {
+        IdentityManager::load_or_generate("BALANCED");
+    } catch (...) {
+        IdentityManager::deactivate();
+        throw std::runtime_error("Zle haslo — nie mozna usunac profilu");
+    }
+    IdentityManager::deactivate();
+    release_session_lock(dir);
+    if (was_active) {
+        g_active_dir.clear();
+        RoomStore::deactivate();
+    }
+    fs::remove_all(dir);
+}
+
+fs::path ProfileManager::active_dir() {
+    return g_active_dir;
 }

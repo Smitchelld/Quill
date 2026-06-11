@@ -52,6 +52,7 @@ add_library(quill_core STATIC
         src/crypto/Argon2.cpp
         src/crypto/IdentityManager.cpp
         src/crypto/ProfileManager.cpp
+        src/crypto/RoomStore.cpp
         src/crypto/TrustStore.cpp
         src/crypto/CryptoManager.cpp
         src/network/Socket.cpp
@@ -96,6 +97,7 @@ if (GTest_FOUND)
             tests/test_dilithium.cpp
             tests/test_identity.cpp
             tests/test_profile.cpp
+            tests/test_roomstore.cpp
             tests/test_truststore.cpp
             tests/test_messageformat.cpp
             tests/test_filetransfer.cpp

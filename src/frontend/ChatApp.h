@@ -9,6 +9,7 @@
 #include "../network/NetworkClient.h"
 #include "../network/Socket.h"
 #include "../crypto/ProfileManager.h"
+#include "../crypto/RoomStore.h"
 #include "../crypto/TrustStore.h"
 #include <nlohmann/json.hpp>
 #include "../protocol/FileTransfer.h"
@@ -81,6 +82,7 @@ struct ConnectedClient {
     uint64_t                recv_seq = 0;  // ostatni seq odebrany od klienta
     // Rotacja PFS inicjowana przez serwer (auto co N wiadomości); chronione m_clients_mtx
     bool                    pending_pfs_rotation = false;
+    std::string             pending_pfs_level;    // pusty => biezacy security_level()
 };
 
 // ── CHATAPP ───────────────────────────────────────────────────────
@@ -138,6 +140,7 @@ private:
 
     // ── SOCKET KLIENTA ───────────────────────────────────────────
     std::unique_ptr<NetworkClient>  m_client;
+    std::mutex                      m_client_send_mtx;
 
     // ── POKOJE ───────────────────────────────────────────────────
     std::map<std::string, std::set<std::string>> m_rooms;
@@ -172,6 +175,12 @@ private:
     std::atomic<int> m_msg_count{0};
 
     char        m_new_room_buf[64]{};
+    char        m_new_room_pass_buf[64]{};
+    char        m_join_room_pass_buf[64]{};
+    char        m_delete_pass_buf[256]{};
+    bool        m_delete_modal_open   = false;
+    std::string m_pending_join_room;
+    std::map<std::string, bool> m_room_protected; // cache z ROOM_LIST
 
     std::string m_last_raw_nonce = "N/A";
     std::string m_last_raw_cipher = "N/A";
@@ -219,7 +228,17 @@ private:
     void do_create_profile(const std::string& name,
                            const std::string& pass1, const std::string& pass2);
     void do_logout();
+    void do_delete_profile(const std::string& passphrase);
+    void disconnect_session();
     void cleanse_login_buffers();
+    void load_persisted_rooms();
+    void broadcast_room_list();
+    void send_display_name();
+    void apply_server_security_level(const std::string& level);
+    void submit_new_room();
+    void delete_room(const std::string& room);
+    void client_send(const Bytes& data);
+    void client_send(const std::string& s);
     void start_server();
     void start_client();
     void send_chat_msg(const std::string& text);
@@ -231,7 +250,8 @@ private:
     void retain_outbound_session(FileSenderSession session);
 
     // ── HANDSHAKE ────────────────────────────────────────────────
-    Bytes do_client_handshake(Socket& sock, const std::string& level);
+    Bytes do_client_handshake(Socket& sock, const std::string& level,
+                              bool server_rehandshake = false);
     Bytes do_server_handshake(Socket& sock, const std::string& level);
 
     // ── BENCHMARKI & STATYSTYKI ──────────────────────────────────
@@ -241,8 +261,8 @@ private:
     static std::vector<SecurityEstimate> build_security_estimates(const std::string& level);
 
     // ── POKOJE ───────────────────────────────────────────────────
-    void join_room(const std::string& room);
-    void create_room(const std::string& room);
+    void join_room(const std::string& room, const std::string& password = "");
+    bool create_room(const std::string& room, const std::string& password = "");
     void broadcast_to_room(const std::string& room,
                            const std::string& msg,
                            std::shared_ptr<Socket> exclude = nullptr);
@@ -250,7 +270,8 @@ private:
     // PFS po stronie serwera — handshake musi przebiegać w wątku handlera klienta
     void perform_pfs_rotation(std::shared_ptr<Socket> sock, const std::string& level);
     void request_pfs_rotation(const std::string& room);
-    bool take_pending_pfs_rotation(const std::shared_ptr<Socket>& sock);
+    bool take_pending_pfs_rotation(const std::shared_ptr<Socket>& sock,
+                                   std::string& out_level);
 
     // Thread-safe odczyt/zapis poziomu PQC (UI + wątki sieciowe)
     std::string security_level() const;

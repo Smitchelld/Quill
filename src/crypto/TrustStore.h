@@ -47,9 +47,11 @@ class TrustStore {
 public:
     // TOFU: nowy peer => zapis jako UNVERIFIED. Znany => KNOWN/VERIFIED.
     // Inny klucz => MISMATCH (wpis pozostaje nietknięty!).
+    // allow_algo_rotation: zmiana algorytmu PQC u tego samego serwera (re-handshake).
     static TrustDecision check_and_remember(const std::string& peer_id,
                                             const Bytes& public_key,
-                                            const std::string& algo);
+                                            const std::string& algo,
+                                            bool allow_algo_rotation = false);
 
     // Użytkownik potwierdził fingerprint out-of-band
     static void mark_verified(const std::string& peer_id);

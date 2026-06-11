@@ -45,6 +45,7 @@ public:
     uint32_t total_chunks() const { return m_total_chunks; }
 
     bool send_start(const FileSender::SendCallback& on_packet) const;
+    bool send_chunk(uint32_t index, const FileSender::SendCallback& on_packet) const;
     bool send_all_chunks(const FileSender::SendCallback& on_packet) const;
     bool send_end(const FileSender::SendCallback& on_packet) const;
     bool send_all(const FileSender::SendCallback& on_packet);

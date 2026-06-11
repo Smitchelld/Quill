@@ -26,7 +26,8 @@ CryptoManager::CryptoManager(std::string level) : m_level(std::move(level)) {}
 
 HandshakeResult CryptoManager::client_handshake(Socket& sock,
                                                 const std::string& peer_id,
-                                                const StepCallback& on_step) {
+                                                const StepCallback& on_step,
+                                                bool server_rehandshake) {
     KyberKEM      kem(m_level);
     DilithiumSign signer(m_level);
 
@@ -48,7 +49,8 @@ HandshakeResult CryptoManager::client_handshake(Socket& sock,
     // 2b. TOFU — fail-closed PRZED enkapsulacją: przy MISMATCH atakujący
     //     nie dostaje nawet ciphertextu KEM
     auto trust = TrustStore::check_and_remember(peer_id, srv_sig_pub,
-                                                signer.algo_name());
+                                                signer.algo_name(),
+                                                server_rehandshake);
     if (trust.state == TrustState::MISMATCH) {
         step(on_step, "TOFU: KEY MISMATCH — CONNECTION BLOCKED");
         throw TofuMismatchError(trust.stored_fingerprint, trust.fingerprint);

@@ -77,7 +77,8 @@ static void save_store_locked(const json& j) {
 
 TrustDecision TrustStore::check_and_remember(const std::string& peer_id,
                                              const Bytes& public_key,
-                                             const std::string& algo) {
+                                             const std::string& algo,
+                                             bool allow_algo_rotation) {
     std::lock_guard lk(g_mtx);
 
     std::string hash = full_key_hash(public_key);
@@ -102,8 +103,20 @@ TrustDecision TrustStore::check_and_remember(const std::string& peer_id,
     std::string stored_fp   = entry.value("fingerprint", "");
 
     if (stored_hash != hash) {
-        // Zmiana klucza = potencjalny MITM. Wpis zostaje nietknięty —
-        // nadpisanie wymaga świadomego TrustStore::remove() przez użytkownika.
+        std::string stored_algo = entry.value("algo", "");
+        if (allow_algo_rotation && stored_algo != algo) {
+            bool was_verified = entry.value("verified", false);
+            store[peer_id] = {
+                {"key_sha3",    hash},
+                {"fingerprint", fp},
+                {"algo",        algo},
+                {"verified",    was_verified},
+            };
+            save_store_locked(store);
+            return {was_verified ? TrustState::VERIFIED : TrustState::KNOWN,
+                    fp, stored_fp};
+        }
+        // Zmiana klucza = potencjalny MITM. Wpis zostaje nietknięty.
         return {TrustState::MISMATCH, fp, stored_fp};
     }
 

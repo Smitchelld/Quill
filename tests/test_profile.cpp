@@ -70,3 +70,11 @@ TEST_F(ProfileTest, FailedCreateLeavesNoResidue) {
 TEST_F(ProfileTest, UnknownProfileRejected) {
     EXPECT_THROW(ProfileManager::unlock("ghost", "x"), std::runtime_error);
 }
+
+TEST_F(ProfileTest, RemoveRequiresCorrectPassphrase) {
+    ProfileManager::create("alice", "alicepass1");
+    ProfileManager::logout();
+    EXPECT_THROW(ProfileManager::remove("alice", "wrongpass1"), std::runtime_error);
+    EXPECT_NO_THROW(ProfileManager::remove("alice", "alicepass1"));
+    EXPECT_TRUE(ProfileManager::list().empty());
+}

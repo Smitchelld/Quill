@@ -56,7 +56,8 @@ public:
     // zmianie klucza serwera, std::runtime_error przy innych błędach.
     HandshakeResult client_handshake(Socket& sock,
                                      const std::string& peer_id,
-                                     const StepCallback& on_step = nullptr);
+                                     const StepCallback& on_step = nullptr,
+                                     bool server_rehandshake = false);
 
     // Strona serwerowa. Klient jest identyfikowany w known_hosts po
     // własnym kluczu ("cli:<fingerprint>") — mismatch tu nie występuje.

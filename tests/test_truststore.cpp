@@ -47,6 +47,17 @@ TEST_F(TrustTest, MarkVerifiedPromotes) {
     EXPECT_EQ(d.state, TrustState::VERIFIED);
 }
 
+TEST_F(TrustTest, AlgoRotationUpdatesKeyWhenAllowed) {
+    TrustStore::check_and_remember(m_peer, m_keyA, "ML-DSA-65");
+    TrustStore::mark_verified(m_peer);
+
+    auto d = TrustStore::check_and_remember(m_peer, m_keyB, "Falcon-512", true);
+    EXPECT_EQ(d.state, TrustState::VERIFIED);
+
+    auto again = TrustStore::check_and_remember(m_peer, m_keyB, "Falcon-512");
+    EXPECT_EQ(again.state, TrustState::VERIFIED);
+}
+
 TEST_F(TrustTest, KeyChangeIsMismatchAndPreservesEntry) {
     auto first = TrustStore::check_and_remember(m_peer, m_keyA, "ML-DSA-65");
     TrustStore::mark_verified(m_peer);

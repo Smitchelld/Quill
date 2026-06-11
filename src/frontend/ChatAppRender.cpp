@@ -1,5 +1,6 @@
 #include "ChatApp.h"
 #include "Theme.h"
+#include <openssl/crypto.h>
 #include <algorithm>
 #include "../../third_party/portable-file-dialogs.h"
 
@@ -32,9 +33,13 @@ void ChatApp::render() {
             if (!m_profile_encrypted)
                 ImGui::TextColored(Theme::red(), "klucz bez passphrase'a!");
             ImGui::Separator();
-            // Wylogowanie zablokowane w trakcie sesji (klucze potrzebne do PFS)
-            if (ImGui::MenuItem("Logout", nullptr, false, m_mode == AppMode::NONE))
+            if (m_mode != AppMode::NONE)
+                ImGui::TextColored(Theme::dim(),
+                    "Logout rozlaczy sesje sieciowa.");
+            if (ImGui::MenuItem("Logout"))
                 do_logout();
+            if (ImGui::MenuItem("Delete profile..."))
+                m_delete_modal_open = true;
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -47,8 +52,11 @@ void ChatApp::render() {
     } else if (m_mode == AppMode::NONE) {
         render_setup_panel();
     } else {
-        float avail_h = ImGui::GetContentRegionAvail().y - 110.0f;
-        float rooms_w = 130.0f;
+        const float input_h_est = ImGui::GetTextLineHeightWithSpacing() * 1.5f;
+        const float bottom_reserve = 50.0f + 8.0f + 64.0f + 8.0f
+            + std::max(input_h_est, 28.0f) + 36.0f;
+        float avail_h = ImGui::GetContentRegionAvail().y - bottom_reserve;
+        float rooms_w = 155.0f;
         float hs_w    = 260.0f; // Lekko poszerzone dla Dashboardu
         float chat_w  = ImGui::GetContentRegionAvail().x - rooms_w - hs_w - 16.0f;
 
@@ -63,6 +71,30 @@ void ChatApp::render() {
     if (m_show_benchmarks) render_benchmark_window();
     if (m_show_security)   render_security_window();
     if (m_show_trusted)    render_trusted_window();
+
+    if (m_logged_in && m_delete_modal_open)
+        ImGui::OpenPopup("Delete profile");
+    if (ImGui::BeginPopupModal("Delete profile", &m_delete_modal_open,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(Theme::red(),
+            "Usunac profil '%s'?\nTej operacji nie mozna cofnac.",
+            m_profile_name.c_str());
+        ImGui::Spacing();
+        ImGui::TextColored(Theme::secondary(), "Potwierdz haslem:");
+        ImGui::SetNextItemWidth(280.0f);
+        ImGui::InputText("##delpass", m_delete_pass_buf, sizeof(m_delete_pass_buf),
+                         ImGuiInputTextFlags_Password);
+        ImGui::Spacing();
+        if (ImGui::Button("Usun", {120, 0})) {
+            do_delete_profile(std::string(m_delete_pass_buf));
+            if (!m_logged_in)
+                m_delete_modal_open = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Anuluj", {120, 0}))
+            m_delete_modal_open = false;
+        ImGui::EndPopup();
+    }
 
     ImGui::End();
 }
@@ -209,21 +241,6 @@ void ChatApp::render_setup_panel() {
     ImGui::InputInt("##port", &m_port, 0);
 
     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
-    ImGui::TextColored(Theme::secondary(), "SECURITY LEVEL");
-    ImGui::Spacing();
-
-    float btn_w = (ImGui::GetContentRegionAvail().x - 8.0f) / 3.0f;
-    for (auto& lvl : {"FAST", "BALANCED", "MAX"}) {
-        bool sel = (security_level() == lvl);
-        if (sel) ImGui::PushStyleColor(ImGuiCol_Button,        Theme::accent());
-        if (sel) ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::accent());
-        if (ImGui::Button(lvl, {btn_w, 28})) set_security_level(lvl);
-        if (sel) ImGui::PopStyleColor(2);
-        ImGui::SameLine(0, 4);
-    }
-
-    ImGui::NewLine();
-    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
     ImGui::TextColored(Theme::secondary(), "DOWNLOAD DIRECTORY");
 
@@ -243,8 +260,27 @@ void ChatApp::render_setup_panel() {
 
     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
+    ImGui::TextColored(Theme::secondary(), "SECURITY LEVEL (serwer)");
+    ImGui::TextColored(Theme::dim(),
+        "Klienci dostaja ten poziom\nautomatycznie po polaczeniu.");
+    ImGui::Spacing();
+    float lvl_w = (ImGui::GetContentRegionAvail().x - 8.0f) / 3.0f;
+    for (auto& lvl : {"FAST", "BALANCED", "MAX"}) {
+        bool sel = (security_level() == lvl);
+        if (sel) ImGui::PushStyleColor(ImGuiCol_Button,        Theme::accent());
+        if (sel) ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::accent());
+        if (ImGui::Button(lvl, {lvl_w, 28})) set_security_level(lvl);
+        if (sel) ImGui::PopStyleColor(2);
+        ImGui::SameLine(0, 4);
+    }
+    ImGui::NewLine();
+    ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+
     if (ImGui::Button("  START SERVER  ",   {ImGui::GetContentRegionAvail().x, 32}))
         start_server();
+    ImGui::Spacing();
+    ImGui::TextColored(Theme::dim(),
+        "Jako klient poziom ustala serwer —\nnie wybierasz go tutaj.");
     ImGui::Spacing();
     if (ImGui::Button("  CONNECT AS CLIENT  ", {ImGui::GetContentRegionAvail().x, 32}))
         start_client();
@@ -266,11 +302,14 @@ void ChatApp::render_rooms_sidebar(float width, float height) {
             bool sel = (room == m_current_room);
             if (sel) ImGui::PushStyleColor(ImGuiCol_Button, Theme::accent());
             std::string label = "#" + room;
+            auto pit = m_room_protected.find(room);
+            if (pit != m_room_protected.end() && pit->second)
+                label += " *";
             if (ImGui::Button(label.c_str(), {width - 16.0f, 24})) {
                 if (m_mode == AppMode::CLIENT && m_connected)
                     join_room(room);
                 else
-                    m_current_room = room;
+                    join_room(room);
             }
             if (sel) ImGui::PopStyleColor();
             ImGui::TextColored(Theme::dim(), "  %d members", (int)members.size());
@@ -278,20 +317,40 @@ void ChatApp::render_rooms_sidebar(float width, float height) {
         }
     }
 
+    if (!m_pending_join_room.empty()) {
+        ImGui::TextColored(Theme::yellow(), "Haslo do #%s:", m_pending_join_room.c_str());
+        ImGui::SetNextItemWidth(width - 16.0f);
+        ImGui::InputText("##joinpass", m_join_room_pass_buf, sizeof(m_join_room_pass_buf),
+                         ImGuiInputTextFlags_Password);
+        if (ImGui::Button("Dolacz", {width - 16.0f, 24})) {
+            join_room(m_pending_join_room, std::string(m_join_room_pass_buf));
+        }
+        ImGui::Spacing();
+    }
+
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::TextColored(Theme::dim(), "New room:");
+    ImGui::TextColored(Theme::dim(), "Nowy pokoj:");
     ImGui::SetNextItemWidth(width - 16.0f);
-    if (ImGui::InputText("##newroom", m_new_room_buf, sizeof(m_new_room_buf),
-                         ImGuiInputTextFlags_EnterReturnsTrue)) {
-        if (m_new_room_buf[0] != '\0') {
-            std::string r(m_new_room_buf);
-            if (m_mode == AppMode::SERVER)
-                create_room(r);
-            else if (m_mode == AppMode::CLIENT && m_connected)
-                join_room(r);
-            m_new_room_buf[0] = '\0';
-        }
+    bool new_room_enter = ImGui::InputText("##newroom", m_new_room_buf, sizeof(m_new_room_buf),
+                         ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::TextColored(Theme::dim(), "Haslo (opc., tylko nowy pokoj):");
+    ImGui::SetNextItemWidth(width - 16.0f);
+    ImGui::InputText("##newroompass", m_new_room_pass_buf, sizeof(m_new_room_pass_buf),
+                     ImGuiInputTextFlags_Password);
+    const char* room_btn =
+        (m_mode == AppMode::SERVER) ? "Utworz pokoj" : "Utworz / dolacz";
+    if (ImGui::Button(room_btn, {width - 16.0f, 26}) ||
+        (new_room_enter && m_new_room_buf[0] != '\0'))
+        submit_new_room();
+
+    if (m_mode == AppMode::SERVER && m_current_room != "general") {
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.35f, 0.10f, 0.10f, 1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.45f, 0.14f, 0.14f, 1.f});
+        if (ImGui::Button("Usun pokoj", {width - 16.0f, 26}))
+            delete_room(m_current_room);
+        ImGui::PopStyleColor(2);
     }
 
     ImGui::EndChild();
@@ -311,9 +370,15 @@ void ChatApp::render_chat_panel(float width, float height) {
     {
         std::lock_guard lock(m_log_mtx);
         auto it = m_room_logs.find(m_current_room);
-        if (it != m_room_logs.end())
-            for (auto& entry : it->second)
+        const float wrap_w = width - ImGui::GetStyle().WindowPadding.x * 2.0f - 4.0f;
+        if (it != m_room_logs.end()) {
+            for (auto& entry : it->second) {
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_w);
                 ImGui::TextColored(entry.color, "%s", entry.text.c_str());
+                ImGui::PopTextWrapPos();
+                ImGui::Spacing();
+            }
+        }
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
     }
@@ -424,36 +489,41 @@ void ChatApp::render_handshake_panel(float width, float height) {
         }
     }
 
-    // ── KONTROLA KLIENTA (PFS / TAMPER) ──
-    if (m_mode == AppMode::CLIENT && m_connected) {
+    // ── POZIOM PQC (tylko serwer moze zmieniac) ──
+    if (m_mode == AppMode::SERVER && m_connected) {
         ImGui::Separator();
-
-        // Forward Secrecy Button
-        if (ImGui::Button("ROTATE SESSION KEY (PFS)", {width - 16.f, 26})) {
-            json j; j["type"] = "REQ_LEVEL"; j["level"] = security_level();
-            std::string s = j.dump();
-            if (m_client) m_client->send_bytes(Bytes(s.begin(), s.end()));
-        }
-        ImGui::Spacing();
-
-        ImGui::TextColored(Theme::dim(), "CHANGE LEVEL");
+        ImGui::TextColored(Theme::dim(), "POZIOM PQC (serwer)");
+        ImGui::TextColored(Theme::dim(),
+            "Zmiana wysle nowy handshake\ndo wszystkich klientow.");
         float bw = (width - 28.0f - 8.0f) / 3.0f;
         for (auto& lvl : {"FAST", "BALANCED", "MAX"}) {
             bool sel = (security_level() == lvl);
             if (sel) ImGui::PushStyleColor(ImGuiCol_Button, Theme::accent());
             if (sel) ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::accent());
-            if (ImGui::Button(lvl, {bw, 22})) {
-                set_security_level(lvl);
-                json j; j["type"] = "REQ_LEVEL"; j["level"] = lvl;
-                std::string s = j.dump();
-                if (m_client) m_client->send_bytes(Bytes(s.begin(), s.end()));
-            }
+            if (ImGui::Button(lvl, {bw, 22}))
+                apply_server_security_level(lvl);
             if (sel) ImGui::PopStyleColor(2);
             ImGui::SameLine(0, 4);
         }
         ImGui::NewLine();
         ImGui::Spacing();
+    }
 
+    if (m_mode == AppMode::CLIENT && m_connected) {
+        ImGui::Separator();
+        ImGui::TextColored(Theme::dim(), "POZIOM PQC (ustawiony przez serwer)");
+        ImGui::TextColored(Theme::blue_text(), "%s", security_level().c_str());
+        ImGui::Spacing();
+        if (ImGui::Button("ROTATE SESSION KEY (PFS)", {width - 16.f, 26})) {
+            json j; j["type"] = "REQ_PFS";
+            std::string s = j.dump();
+            client_send(s);
+        }
+        ImGui::Spacing();
+    }
+
+    // ── TAMPER (klient) ──
+    if (m_mode == AppMode::CLIENT && m_connected) {
         // Tamper Button (z czerwonym trybem awaryjnym)
         bool ta = m_tamper;
         if (ta) {
@@ -475,16 +545,52 @@ void ChatApp::render_input_bar() {
     ImGui::Separator();
 
     // --- PACKET INSPECTOR ---
-    ImGui::BeginChild("hex_view", {ImGui::GetContentRegionAvail().x, 50.0f}, true);
-    ImGui::TextColored(Theme::dim(), "WIRE VIEW |"); ImGui::SameLine();
-    ImGui::TextColored(Theme::dim(), "NONCE: "); ImGui::SameLine();
+    const float wire_w = ImGui::GetContentRegionAvail().x - 8.0f;
+    ImGui::BeginChild("hex_view", {wire_w, 50.0f}, true);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wire_w);
+    ImGui::TextColored(Theme::dim(), "WIRE VIEW | NONCE: ");
+    ImGui::SameLine(0.0f, 0.0f);
     ImGui::TextColored(Theme::yellow(), "%s", m_last_raw_nonce.c_str());
-
-    ImGui::TextColored(Theme::dim(), "          |"); ImGui::SameLine();
-    ImGui::TextColored(Theme::dim(), "DATA:  "); ImGui::SameLine();
+    ImGui::TextColored(Theme::dim(), "DATA: ");
+    ImGui::SameLine(0.0f, 0.0f);
     ImGui::TextColored(Theme::green(), "%s", m_last_raw_cipher.c_str());
+    ImGui::PopTextWrapPos();
     ImGui::EndChild();
     // ------------------------
+
+    ImGui::Spacing();
+
+    // ── PASKI POSTĘPU TRANSFERU (stała wysokość, przewijanie) ───────
+    ImGui::BeginChild("file_xfers", {wire_w, 64.0f}, true);
+    {
+        std::lock_guard lk(m_file_progress_mtx);
+        for (auto it = m_file_progress.begin(); it != m_file_progress.end(); ) {
+            auto& p = it->second;
+
+            ImGui::TextColored(Theme::yellow(), "[FILE] %s", p.file_name.c_str());
+            ImGui::SameLine();
+
+            if (p.done) {
+                if (p.ok) {
+                    ImGui::TextColored(Theme::green(), "OK");
+                } else {
+                    ImGui::TextColored(Theme::red(), "Blad: %s", p.error_msg.c_str());
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(("X##" + it->first).c_str())) {
+                    it = m_file_progress.erase(it);
+                    continue;
+                }
+            } else {
+                float fraction = (float)p.received / (float)(p.total > 0 ? p.total : 1);
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%u / %u", p.received, p.total);
+                ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f), buf);
+            }
+            ++it;
+        }
+    }
+    ImGui::EndChild();
 
     ImGui::Spacing();
 
@@ -503,11 +609,15 @@ void ChatApp::render_input_bar() {
     // Odejmujemy trzy przyciski (Send, Browse, Send File) i path_w
     float chat_w = ImGui::GetContentRegionAvail().x - (btn_w * 3) - path_w - 32.0f;
 
-    // Pole tekstowe czatu
+    // Pole tekstowe czatu (zawijanie; Enter=wyslij, Ctrl+Enter=nowa linia)
+    const float input_h = ImGui::GetTextLineHeightWithSpacing() * 1.5f;
     ImGui::SetNextItemWidth(chat_w);
-    bool send = ImGui::InputText("##input", m_input_buf, sizeof(m_input_buf),
-                                 ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::SameLine();
+    bool send = ImGui::InputTextMultiline(
+        "##input", m_input_buf, sizeof(m_input_buf), {chat_w, input_h},
+        ImGuiInputTextFlags_EnterReturnsTrue
+        | ImGuiInputTextFlags_WordWrap
+        | ImGuiInputTextFlags_CtrlEnterForNewLine);
+    ImGui::SameLine(0.0f, 8.0f);
 
     // Przycisk wyślij tekst
     ImGui::PushStyleColor(ImGuiCol_Button,        Theme::accent());
@@ -550,37 +660,6 @@ void ChatApp::render_input_bar() {
         send_chat_msg(std::string(m_input_buf));
         m_input_buf[0] = '\0';
         ImGui::SetKeyboardFocusHere(-1);
-    }
-
-    // ── PASKI POSTĘPU TRANSFERU ─────────────────────────────────────
-    std::lock_guard lk(m_file_progress_mtx);
-    for (auto it = m_file_progress.begin(); it != m_file_progress.end(); ) {
-        auto& p = it->second;
-
-        ImGui::Spacing();
-        ImGui::TextColored(Theme::yellow(), "[FILE] %s", p.file_name.c_str());
-        ImGui::SameLine();
-
-        if (p.done) {
-            if (p.ok) {
-                ImGui::TextColored(Theme::green(), "✓ Ukończono");
-            } else {
-                ImGui::TextColored(Theme::red(), "✗ Błąd: %s", p.error_msg.c_str());
-            }
-            // Zamknięcie elementu zakończonego transferu z listy
-            ImGui::SameLine();
-            if (ImGui::Button(("X##" + it->first).c_str())) {
-                it = m_file_progress.erase(it);
-                continue;
-            }
-        } else {
-            // Obliczanie postępu
-            float fraction = (float)p.received / (float)(p.total > 0 ? p.total : 1);
-            char buf[64];
-            snprintf(buf, sizeof(buf), "%d / %d chunks", p.received, p.total);
-            ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f), buf);
-        }
-        ++it;
     }
 }
 

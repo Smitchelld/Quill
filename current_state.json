@@ -1,6 +1,6 @@
 {
   "project": "Quill - Post-Quantum Encrypted P2P Messenger",
-  "status_date": "2026-06-10",
+  "status_date": "2026-06-11",
   "version": "1.0.0",
   "current_state": {
     "done": [
@@ -30,7 +30,7 @@
       "TOFU UI: sekcja PEER TRUST w panelu handshake (stan + MARK AS VERIFIED), okno Tools > Trusted Peers (lista, Verify, Remove), alert MITM z oboma fingerprintami w logu",
       "CryptoManager: cały PQC handshake (klient+serwer), TOFU, HKDF i tożsamość w jednej warstwie bez zależności od UI; ChatApp::do_*_handshake to cienkie wrappery (logi+visualizer); TofuMismatchError z fingerprintami expected/received; inwarianty (verify przed encaps/decaps, fail-closed TOFU, cleanse) egzekwowane w warstwie krypto",
       "Ochrona przed replay + AAD: AES-256-GCM przyjmuje teraz AAD (opcjonalny, domyślnie pusty = zgodność wsteczna). Wiadomości CHAT mają monotoniczny numer sekwencji per kierunek (klient: m_send_seq/m_recv_seq; serwer: send_seq/recv_seq w ConnectedClient) wiązany przez AAD='CHAT|<seq>'. Odbiorca odrzuca seq<=ostatni (fail-closed); podmiana seq w JSON psuje tag GCM. Liczniki resetowane przy każdym handshake/rotacji PFS (stary szyfrogram i tak nie deszyfruje się nowym kluczem).",
-      "Testy Google Test (tests/, 97 testów): Hkdf (wektory RFC 5869), Argon2, AesGcm (tamper/wrong key/nonce + AAD: roundtrip, zły/brakujący/niespodziewany AAD, wiązanie seq jako anty-replay), KyberKEM i DilithiumSign (wszystkie poziomy), IdentityManager (QID1/QID2, złe hasło, migracja, uprawnienia, korupcja), ProfileManager (path traversal, passphrase policy), TrustStore (pełny cykl TOFU + atak), MessageFormat, FileTransfer (NACK, chunk_hash, korupcja, injection), CryptoManager (integracyjny handshake przez socketpair, MITM blocked, tampered ciphertext)",
+      "Testy Google Test (tests/, 105 testów): Hkdf (wektory RFC 5869), Argon2, AesGcm (tamper/wrong key/nonce + AAD: roundtrip, zły/brakujący/niespodziewany AAD, wiązanie seq jako anty-replay), KyberKEM i DilithiumSign (wszystkie poziomy), IdentityManager (QID1/QID2, złe hasło, migracja, uprawnienia, korupcja), ProfileManager (path traversal, passphrase policy), TrustStore (pełny cykl TOFU + atak), MessageFormat, FileTransfer (NACK, chunk_hash, korupcja, injection), CryptoManager (integracyjny handshake przez socketpair, MITM blocked, tampered ciphertext)",
       "Wzmocnienie QID1: suma SHA-3-256 payloadu w pliku (deterministyczna detekcja korupcji; sam self-test sign/verify nie łapał każdego przekłamania bajtu w ML-DSA sk)",
       "Bugfix MessageFormat: json::binary nie przeżywa dump()/parse() (tekstowy JSON nie ma typu binarnego) - nonce/payload serializowane teraz jako tablice; bug wykryty przez nowe testy",
       "Sprzątanie martwych połączeń: po rozłączeniu klient usuwany z m_clients i m_rooms (server_client_handler cleanup)",
@@ -42,7 +42,19 @@
       "SHA-3 per chunk: FILE_CHUNK zawiera chunk_hash=SHA3-256(plaintext); odbiorca weryfikuje po deszyfracji GCM przed buforowaniem (fail-fast); FILE_END nadal weryfikuje hash całości",
       "CI GitHub Actions (.github/workflows/ci.yml): build quill_core + ctest na push/PR (QUILL_BUILD_GUI=OFF); liboqs budowany w jobie",
       "Argon2 dual backend: OpenSSL >= 3.2 (EVP_KDF ARGON2ID) lub libargon2 na starszych dystrybucjach (Ubuntu CI); wykrywane w CMake",
-      "ImGui jako git submodule (third_party/imgui v1.92.8); QUILL_BUILD_GUI=OFF omija GLFW/OpenGL w CI"
+      "ImGui jako git submodule (third_party/imgui v1.92.8); QUILL_BUILD_GUI=OFF omija GLFW/OpenGL w CI",
+      "RoomStore (rooms.json per profil): trwałe pokoje, hasła chronione Argon2id, walidacja duplikatu przy tworzeniu, usuwanie pokoju (bez general)",
+      "Protokół pokoi: CREATE_ROOM, ROOM_CREATED, ROOM_EXISTS, ROOM_DELETED, JOIN_DENIED, ROOM_LIST (protected flag), SET_DISPLAY_NAME (nick z profilu)",
+      "Poziom PQC ustala serwer (SERVER_CONFIG przed handshake); klient nie wybiera poziomu w UI",
+      "Sesja profilu: .session.lock — jedno logowanie na profil; logout rozłącza sesję sieciową przed wylogowaniem",
+      "Usuwanie profilu z potwierdzeniem hasłem (modal Profile > Delete)",
+      "TOFU: allow_algo_rotation przy re-handshake (zmiana FAST/BALANCED/MAX nie blokuje jako MITM)",
+      "PFS serwer: rotacja w wątku handlera klienta (pending_pfs_rotation), nie z wątku UI",
+      "UI czat: zawijanie tekstu w logu i polu wpisywania (InputTextMultiline, Enter=wysyłka, Ctrl+Enter=nowa linia)",
+      "UI transfer plików: stały panel postępu (scroll), mniejsze pole inputu; postęp nadawcy; client_send() z mutexem na socket klienta",
+      "Transfer dużych plików: pacing chunków, limit 100 MB, lepsze logi błędów",
+      "Dokumentacja LaTeX: docs/dokumentacja.tex (~30 stron)",
+      "Google Test: 105 testów (m.in. RoomStore duplicate/remove, TrustStore algo rotation)"
     ],
     "in_progress": [],
     "todo": [
@@ -85,6 +97,28 @@
         "fix": "Opcjonalnie: ASan/UBSan, build z GUI."
       }
     ]
+  },
+  "persistence": {
+    "_comment": "Brak SQL — dane trwałe w plikach na dysku (JSON + binarne klucze).",
+    "profiles_root": "~/.quill/profiles/ (nadpisanie: $QUILL_PROFILES_DIR)",
+    "per_profile_layout": {
+      "profile.json": "metadane: name, fingerprint, encrypted",
+      "identity/": "klucze ML-DSA/Falcon per poziom (*.id, format QID1/QID2, chmod 0600)",
+      "known_hosts": "TOFU — zaufani peerzy (JSON, chmod 0600), TrustStore",
+      "rooms.json": "pokoje + weryfikatory hasel Argon2 (RoomStore)",
+      ".session.lock": "blokada jednej aktywnej sesji GUI na profil"
+    },
+    "legacy_fallback": "$QUILL_IDENTITY_DIR lub ~/.quill/identity (gdy brak aktywnego profilu)",
+    "runtime_only": {
+      "received_files/": "domyślny katalog pobieranych plików (względem CWD, konfigurowalny w UI)",
+      "m_rooms_m_clients": "stan pokoi i klientów w RAM serwera — nie trwały poza sesją"
+    },
+    "code": {
+      "ProfileManager": "src/crypto/ProfileManager.cpp",
+      "IdentityManager": "src/crypto/IdentityManager.cpp",
+      "TrustStore": "src/crypto/TrustStore.cpp",
+      "RoomStore": "src/crypto/RoomStore.cpp"
+    }
   },
   "technical_stack": {
     "language": "C++23",

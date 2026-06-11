@@ -50,7 +50,14 @@
       "File transfer UI: file picker, progress bars, download directory",
       "ImGui git submodule (third_party/imgui v1.92.8)",
       "GitHub Actions CI: build quill_core + ctest (QUILL_BUILD_GUI=OFF)",
-      "Google Test suite (tests/, 97 tests)"
+      "Google Test suite (tests/, 105 tests)",
+      "RoomStore: rooms.json per profile, Argon2 room passwords, duplicate check, delete room",
+      "Room protocol: CREATE_ROOM, ROOM_CREATED, ROOM_EXISTS, ROOM_DELETED, JOIN_DENIED, SET_DISPLAY_NAME",
+      "Server sets PQC level (SERVER_CONFIG); single profile session lock (.session.lock)",
+      "Profile delete with passphrase; logout disconnects network first",
+      "TOFU algo rotation on re-handshake; PFS rotation in server client handler thread",
+      "UI: chat word wrap, multiline input; file transfer progress panel + client_send mutex",
+      "LaTeX docs: docs/dokumentacja.tex"
     ],
     "not_done": [
       "NAT Traversal: UDP hole punching + rendezvous server",
@@ -106,7 +113,7 @@
     "transport": "TCP with length-prefixed framing (uint32_t network byte order)",
     "message_format": {
       "encoding": "JSON via nlohmann/json (binary arrays for raw bytes)",
-      "types": ["CHAT", "JOIN", "ROOM_LIST", "REQ_LEVEL", "DO_HANDSHAKE", "FILE_START", "FILE_CHUNK", "FILE_END", "FILE_NACK"]
+      "types": ["CHAT", "JOIN", "CREATE_ROOM", "ROOM_LIST", "ROOM_CREATED", "ROOM_EXISTS", "ROOM_DELETED", "JOIN_DENIED", "SET_DISPLAY_NAME", "SERVER_CONFIG", "REQ_PFS", "DO_HANDSHAKE", "FILE_START", "FILE_CHUNK", "FILE_END", "FILE_NACK"]
     },
     "file_transfer": "FILE_START -> FILE_CHUNK (chunk_hash=SHA3 plaintext, AAD, AES-GCM) -> FILE_END (whole-file SHA3). Missing: FILE_NACK -> selective repeat."
   },
@@ -118,10 +125,16 @@
       "src/frontend/": "ChatApp, ChatAppRender, Theme",
       "src/network/": "Socket, NetworkServer, NetworkClient",
       "src/protocol/": "MessageFormat, FileTransfer",
-      "tests/": "Google Test (97 tests) — quill_core only",
+      "tests/": "Google Test (105 tests) — quill_core only",
       "third_party/": "imgui (submodule), portable-file-dialogs",
       ".github/workflows/": "ci.yml",
-      "docs/": "OVERVIEW.md"
+      "docs/": "OVERVIEW.md, dokumentacja.tex"
+    },
+    "src_lines": 5567,
+    "persistence": {
+      "profiles_root": "~/.quill/profiles/ ($QUILL_PROFILES_DIR)",
+      "per_profile": ["profile.json", "identity/*.id", "known_hosts", "rooms.json", ".session.lock"],
+      "modules": ["ProfileManager", "IdentityManager", "TrustStore", "RoomStore"]
     }
   },
 

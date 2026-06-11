@@ -45,6 +45,12 @@ public:
 
     // Wylogowanie: czyści klucze i passphrase z pamięci.
     static void logout();
+
+    // Usuwa profil po weryfikacji passphrase (nieodwracalne).
+    static void remove(const std::string& name, const std::string& passphrase);
+
+    // Aktywny katalog profilu (pusty gdy wylogowany).
+    static std::filesystem::path active_dir();
 };
 
 #endif // QUILL_PROFILEMANAGER_H

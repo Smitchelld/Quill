@@ -115,6 +115,12 @@ bool FileSenderSession::send_chunk_packet(uint32_t index,
     return on_packet(j.dump());
 }
 
+bool FileSenderSession::send_chunk(uint32_t index,
+                                   const FileSender::SendCallback& on_packet) const
+{
+    return send_chunk_packet(index, on_packet);
+}
+
 bool FileSenderSession::send_all_chunks(const FileSender::SendCallback& on_packet) const {
     for (uint32_t i = 0; i < m_total_chunks; ++i)
         if (!send_chunk_packet(i, on_packet)) return false;
