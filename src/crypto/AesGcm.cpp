@@ -13,7 +13,6 @@ static void feed_aad(EVP_CIPHER_CTX* ctx, const Bytes& aad, bool encrypt) {
         EVP_DecryptUpdate(ctx, nullptr, &len, aad.data(), (int)aad.size());
 }
 
-// ── WERSJE DLA TEKSTU (Czat) ─────────────────────────────────────────────────
 
 EncryptedData AesGcm::encrypt(const Bytes& key, const std::string& plaintext,
                               const Bytes& aad) {
@@ -82,7 +81,6 @@ std::string AesGcm::decrypt(const Bytes& key, const Bytes& nonce,
 }
 
 
-// ── WERSJE DLA BAJTÓW BINARNYCH (Transfer Plików) ────────────────────────────
 
 EncryptedData AesGcm::encrypt(const Bytes& key, const Bytes& plaintext_bytes,
                               const Bytes& aad) {

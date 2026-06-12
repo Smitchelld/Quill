@@ -17,20 +17,12 @@
 
 namespace fs = std::filesystem;
 
-// Formaty pliku tożsamości (binarne, little-endian):
-//  QID1 (plaintext): magic | pub_len u32 | pub | sec_len u32 | sec |
-//                    sha3_256(payload) (32B; starsze pliki bez sumy są
-//                    akceptowane — wykrywane po dokładnym rozmiarze)
-//  QID2 (encrypted): magic | salt_len u32 | salt | t u32 | m_kib u32 |
-//                    lanes u32 | nonce(12B) | enc_len u32 | enc
-//                    gdzie enc = AES-256-GCM(payload QID1-style) || tag
-//                    (integralność gwarantuje tag GCM)
+// QID1 plaintext / QID2 Argon2id+AES-GCM encrypted identity file.
 static constexpr char     MAGIC_V1[4]  = {'Q', 'I', 'D', '1'};
 static constexpr char     MAGIC_V2[4]  = {'Q', 'I', 'D', '2'};
 static constexpr uint32_t MAX_KEY_LEN  = 16 * 1024;
 static constexpr uint32_t MAX_SALT_LEN = 64;
 
-// ── Stan aktywnego profilu ────────────────────────────────────────
 static std::mutex                              g_mtx;
 static std::map<std::string, SignatureKeyPair> g_cache;
 static std::optional<fs::path>                 g_active_dir;
@@ -78,7 +70,6 @@ static fs::path key_path(const std::string& algo_name) {
     return IdentityManager::identity_dir() / (algo_name + ".id");
 }
 
-// ── SERIALIZACJA ──────────────────────────────────────────────────
 
 static void append_u32(Bytes& out, uint32_t v) {
     out.push_back(v & 0xFF);
@@ -131,9 +122,9 @@ static SignatureKeyPair parse_payload(const Bytes& payload, size_t base_off,
     return {std::move(pub), std::move(sec)};
 }
 
-// ── ZAPIS ─────────────────────────────────────────────────────────
 
 static void write_file_0600(const fs::path& path, const Bytes& blob) {
+    // Atomic write: tmp + rename, chmod 0600.
     fs::create_directories(path.parent_path());
     ::chmod(path.parent_path().c_str(), 0700);
 
@@ -166,14 +157,12 @@ static void write_file_0600(const fs::path& path, const Bytes& blob) {
     }
 }
 
-// passphrase pusty => QID1 (plaintext), inaczej QID2 (Argon2id + AES-GCM)
 static void save_keypair(const fs::path& path, const SignatureKeyPair& kp,
                          const std::string& passphrase) {
     Bytes payload = build_payload(kp);
     Bytes blob;
 
     if (passphrase.empty()) {
-        // Plaintext: integralność zapewnia suma SHA-3-256 na końcu pliku
         Bytes checksum = sha3_256(payload);
         blob.insert(blob.end(), MAGIC_V1, MAGIC_V1 + 4);
         blob.insert(blob.end(), payload.begin(), payload.end());
@@ -201,16 +190,15 @@ static void save_keypair(const fs::path& path, const SignatureKeyPair& kp,
     write_file_0600(path, blob);
 }
 
-// ── ODCZYT ────────────────────────────────────────────────────────
 
 struct LoadedKey {
     SignatureKeyPair kp;
-    bool             was_plaintext = false; // QID1 -> kandydat do migracji
+    bool             was_plaintext = false;
 };
 
 static LoadedKey load_keypair(const fs::path& path, const std::string& passphrase,
                               size_t expect_pub, size_t expect_sec) {
-    // Jak OpenSSH: odmowa użycia klucza czytelnego dla grupy/innych
+    // Refuse key files with permissions broader than 0600.
     struct stat st{};
     if (::stat(path.c_str(), &st) != 0)
         throw std::runtime_error("Identity: stat() nie powiodl sie: " + path.string());
@@ -229,8 +217,6 @@ static LoadedKey load_keypair(const fs::path& path, const std::string& passphras
     LoadedKey result;
 
     if (std::memcmp(blob.data(), MAGIC_V1, 4) == 0) {
-        // Rozmiar pliku jest deterministyczny dla danego algorytmu:
-        // base (legacy, bez sumy) lub base+32 (z suma SHA-3-256)
         const size_t base = 4 + 4 + expect_pub + 4 + expect_sec;
         if (blob.size() == base + 32) {
             Bytes payload(blob.begin() + 4, blob.begin() + base);
@@ -241,7 +227,7 @@ static LoadedKey load_keypair(const fs::path& path, const std::string& passphras
                     " nie zgadza sie — plik uszkodzony lub podmieniony");
             result.kp = parse_payload(blob, 4, base);
         } else if (blob.size() == base) {
-            result.kp = parse_payload(blob, 4, blob.size()); // legacy bez sumy
+            result.kp = parse_payload(blob, 4, blob.size());
         } else {
             throw std::runtime_error("Identity: nieprawidlowy rozmiar pliku QID1");
         }
@@ -277,8 +263,6 @@ static LoadedKey load_keypair(const fs::path& path, const std::string& passphras
             payload = AesGcm::decrypt_bytes(aes_key, nonce, enc);
         } catch (const std::exception&) {
             OPENSSL_cleanse(aes_key.data(), aes_key.size());
-            // GCM tag mismatch: złe hasło albo zmanipulowany plik —
-            // celowo jeden komunikat (nierozróżnialne bez dodatkowych zalozen)
             throw std::runtime_error(
                 "Identity: bledny passphrase lub uszkodzony plik klucza");
         }
@@ -290,7 +274,6 @@ static LoadedKey load_keypair(const fs::path& path, const std::string& passphras
         throw std::runtime_error("Identity: nieprawidlowy format pliku klucza (magic)");
     }
 
-    // Długości muszą zgadzać się z algorytmem — inny algorytm/obcięty plik = błąd
     if (result.kp.public_key.size() != expect_pub || result.kp.secret_key.size() != expect_sec)
         throw std::runtime_error(
             "Identity: dlugosci kluczy w " + path.string() +
@@ -299,7 +282,6 @@ static LoadedKey load_keypair(const fs::path& path, const std::string& passphras
     return result;
 }
 
-// ── API ───────────────────────────────────────────────────────────
 
 SignatureKeyPair IdentityManager::load_or_generate(const std::string& level) {
     DilithiumSign signer(level);
@@ -321,8 +303,6 @@ SignatureKeyPair IdentityManager::load_or_generate(const std::string& level) {
                                         signer.pub_key_len(), signer.sec_key_len());
         kp = std::move(loaded.kp);
 
-        // Self-test: uszkodzony/podmieniony klucz ma zawieść tutaj,
-        // a nie cichą regeneracją (zmiana tożsamości = sygnał ataku)
         static const Bytes probe = {'q','u','i','l','l','-','s','e','l','f','t','e','s','t'};
         Bytes sig = signer.sign(probe, kp.secret_key);
         if (!signer.verify(probe, sig, kp.public_key))
@@ -330,7 +310,6 @@ SignatureKeyPair IdentityManager::load_or_generate(const std::string& level) {
                 "Identity: self-test klucza " + path.string() +
                 " nie powiodl sie — klucz uszkodzony, wymagana interwencja uzytkownika");
 
-        // Migracja w miejscu: QID1 + aktywny passphrase => podnieś do QID2
         if (loaded.was_plaintext && !passphrase.empty())
             save_keypair(path, kp, passphrase);
     } else {
@@ -351,7 +330,6 @@ std::string IdentityManager::fingerprint(const Bytes& public_key) {
         || digest_len < 12)
         throw std::runtime_error("Identity: SHA-3-256 fingerprint nie powiodl sie");
 
-    // 12 bajtów (96 bitów) w 6 grupach: A3F2-9C1B-44DE-F021-8B3C-7A09
     static const char* HEX = "0123456789ABCDEF";
     std::string fp;
     for (size_t i = 0; i < 12; ++i) {

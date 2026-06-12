@@ -7,8 +7,6 @@
 #include <memory>
 
 std::string Hkdf::session_info(const std::string& level) {
-    // Wersja protokołu w etykiecie: zmiana formatu handshake'u w przyszłości
-    // wymusi inne klucze nawet przy identycznym sekrecie.
     return "quill-aes256gcm-session-v1|" + level;
 }
 

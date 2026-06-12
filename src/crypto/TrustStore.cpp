@@ -11,7 +11,6 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-// Dostęp z wątków handshake'u i UI — jeden mutex na cały store
 static std::mutex g_mtx;
 
 const char* TrustStore::state_name(TrustState s) {
@@ -25,12 +24,9 @@ const char* TrustStore::state_name(TrustState s) {
 }
 
 fs::path TrustStore::store_path() {
-    // <profil>/identity -> <profil>/known_hosts
     return IdentityManager::identity_dir().parent_path() / "known_hosts";
 }
 
-// Pełny SHA-3-256 klucza publicznego (64 hex) — do porównań.
-// Skrócony fingerprint (96b) służy tylko do wyświetlania.
 static std::string full_key_hash(const Bytes& public_key) {
     uint8_t digest[EVP_MAX_MD_SIZE];
     unsigned int len = 0;
@@ -52,8 +48,7 @@ static json load_store_locked() {
     try {
         return json::parse(f);
     } catch (const std::exception&) {
-        // Uszkodzony known_hosts to incydent bezpieczeństwa — nie nadpisujemy
-        // go cicho pustym plikiem, tylko zatrzymujemy łączenie
+        // Corrupt known_hosts: fail closed instead of overwriting silently.
         throw std::runtime_error(
             "TrustStore: known_hosts uszkodzony (" +
             TrustStore::store_path().string() + ") — wymagana interwencja");
@@ -64,6 +59,7 @@ static void save_store_locked(const json& j) {
     fs::path path = TrustStore::store_path();
     fs::create_directories(path.parent_path());
 
+    // Atomic write: tmp + rename, chmod 0600.
     fs::path tmp = path;
     tmp += ".tmp";
     {
@@ -87,7 +83,6 @@ TrustDecision TrustStore::check_and_remember(const std::string& peer_id,
     json store = load_store_locked();
 
     if (!store.contains(peer_id)) {
-        // TOFU: pierwszy kontakt — zapamiętujemy, ale NIE ufamy w pełni
         store[peer_id] = {
             {"key_sha3",    hash},
             {"fingerprint", fp},
@@ -116,7 +111,6 @@ TrustDecision TrustStore::check_and_remember(const std::string& peer_id,
             return {was_verified ? TrustState::VERIFIED : TrustState::KNOWN,
                     fp, stored_fp};
         }
-        // Zmiana klucza = potencjalny MITM. Wpis zostaje nietknięty.
         return {TrustState::MISMATCH, fp, stored_fp};
     }
 

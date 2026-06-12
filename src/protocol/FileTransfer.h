@@ -8,15 +8,13 @@
 #include <functional>
 #include <cstdint>
 #include <filesystem>
-#include <nlohmann/json_fwd.hpp>
+#include <nlohmann/json.hpp>
 
 using Bytes = std::vector<uint8_t>;
 
-// ── STAŁE ─────────────────────────────────────────────────────────
 static constexpr size_t  FILE_CHUNK_SIZE      = 64 * 1024; // 64 KB
 static constexpr uint32_t FILE_MAX_NACK_ROUNDS = 5;
 
-// ── FileSender ────────────────────────────────────────────────────
 class FileSender {
 public:
     using SendCallback = std::function<bool(const std::string& packet_json)>;
@@ -28,13 +26,9 @@ public:
 
     static Bytes sha3_256(const Bytes& data);
 
-    // AAD wiąże chunk z transfer_id i indeksem: "FILE|<tid>|<index>".
     static Bytes chunk_aad(const std::string& transfer_id, uint32_t chunk_index);
-
-    // SHA-3-256 pojedynczego chunka plaintextu (pole chunk_hash w FILE_CHUNK).
 };
 
-// Sesja nadawcy — trzyma plaintext chunków do selective repeat (nowy nonce przy retransmisji).
 class FileSenderSession {
 public:
     static FileSenderSession open(const std::filesystem::path& file_path,
@@ -45,6 +39,7 @@ public:
     uint32_t total_chunks() const { return m_total_chunks; }
 
     bool send_start(const FileSender::SendCallback& on_packet) const;
+    nlohmann::json build_chunk_json(uint32_t index, const Bytes& aes_key) const;
     bool send_chunk(uint32_t index, const FileSender::SendCallback& on_packet) const;
     bool send_all_chunks(const FileSender::SendCallback& on_packet) const;
     bool send_end(const FileSender::SendCallback& on_packet) const;
@@ -66,7 +61,6 @@ private:
     std::vector<Bytes>       m_chunks;
 };
 
-// ── IncomingFile ──────────────────────────────────────────────────
 struct IncomingFile {
     std::string               file_name;
     uint64_t                  file_size     = 0;
@@ -74,20 +68,15 @@ struct IncomingFile {
     uint32_t                  received      = 0;
     std::map<uint32_t, Bytes> chunks;
     Bytes                     expected_hash;
-    bool                      awaiting_end  = false; // FILE_END dotarł, brakuje chunków
+    bool                      awaiting_end  = false;
     uint32_t                  nack_rounds   = 0;
 
     Bytes assemble() const;
     bool complete() const { return received == total_chunks; }
 };
 
-enum class FileEndStatus {
-    Complete,   // plik zapisany, on_done(ok=true)
-    NeedsNack,  // brakuje chunków — wyślij FILE_NACK, stan transferu zachowany
-    Failed      // błąd końcowy, on_done(ok=false)
-};
+enum class FileEndStatus { Complete, NeedsNack, Failed };
 
-// ── FileReceiver ──────────────────────────────────────────────────
 class FileReceiver {
 public:
     using DoneCallback = std::function<void(
@@ -99,12 +88,10 @@ public:
     void on_start(const nlohmann::json& j);
     void on_chunk(const nlohmann::json& j, const Bytes& aes_key);
 
-    // Complete / Failed wywołują on_done. NeedsNack — nie; wyślij make_nack().
     FileEndStatus on_end(const nlohmann::json& j,
                          const std::filesystem::path& save_dir,
                          const DoneCallback& on_done);
 
-    // Po uzupełnieniu brakujących chunków (FILE_END już był).
     bool try_finalize(const std::string& transfer_id,
                       const std::filesystem::path& save_dir,
                       const DoneCallback& on_done);

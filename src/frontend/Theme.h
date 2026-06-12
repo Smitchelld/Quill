@@ -1,7 +1,3 @@
-//
-// Created by mitchellds on 6.05.2026.
-//
-
 #ifndef QUILL_THEME_H
 #define QUILL_THEME_H
 
@@ -10,27 +6,26 @@
 namespace Theme {
 
 namespace C {
-    constexpr ImVec4 BG_BASE     = {0.051f, 0.067f, 0.090f, 1.0f}; // #0d1117
-    constexpr ImVec4 BG_SURFACE  = {0.086f, 0.106f, 0.133f, 1.0f}; // #161b22
-    constexpr ImVec4 BG_ELEVATED = {0.114f, 0.141f, 0.173f, 1.0f}; // #1d2433
-    constexpr ImVec4 BORDER      = {0.129f, 0.149f, 0.180f, 1.0f}; // #21262d
-    constexpr ImVec4 BORDER_EM   = {0.188f, 0.212f, 0.251f, 1.0f}; // #303642
-    constexpr ImVec4 ACCENT      = {0.122f, 0.435f, 0.918f, 1.0f}; // #1f6feb
-    constexpr ImVec4 ACCENT_HOVER= {0.216f, 0.522f, 1.000f, 1.0f}; // #378AFF
-    constexpr ImVec4 ACCENT_DIM  = {0.122f, 0.227f, 0.361f, 1.0f}; // #1f3a5c
-    constexpr ImVec4 TEXT_PRI    = {0.788f, 0.820f, 0.851f, 1.0f}; // #c9d1d9
-    constexpr ImVec4 TEXT_SEC    = {0.545f, 0.580f, 0.620f, 1.0f}; // #8b949e
-    constexpr ImVec4 TEXT_DIM    = {0.282f, 0.310f, 0.345f, 1.0f}; // #484f58
-    constexpr ImVec4 GREEN       = {0.247f, 0.725f, 0.314f, 1.0f}; // #3fb950
-    constexpr ImVec4 RED         = {0.973f, 0.318f, 0.286f, 1.0f}; // #f85149
-    constexpr ImVec4 YELLOW      = {0.922f, 0.788f, 0.341f, 1.0f}; // #ebb757
-    constexpr ImVec4 BLUE_TEXT   = {0.345f, 0.651f, 1.000f, 1.0f}; // #58a6ff
+    constexpr ImVec4 BG_BASE     = {0.051f, 0.067f, 0.090f, 1.0f};
+    constexpr ImVec4 BG_SURFACE  = {0.086f, 0.106f, 0.133f, 1.0f};
+    constexpr ImVec4 BG_ELEVATED = {0.114f, 0.141f, 0.173f, 1.0f};
+    constexpr ImVec4 BORDER      = {0.129f, 0.149f, 0.180f, 1.0f};
+    constexpr ImVec4 BORDER_EM   = {0.188f, 0.212f, 0.251f, 1.0f};
+    constexpr ImVec4 ACCENT      = {0.122f, 0.435f, 0.918f, 1.0f};
+    constexpr ImVec4 ACCENT_HOVER= {0.216f, 0.522f, 1.000f, 1.0f};
+    constexpr ImVec4 ACCENT_DIM  = {0.122f, 0.227f, 0.361f, 1.0f};
+    constexpr ImVec4 TEXT_PRI    = {0.788f, 0.820f, 0.851f, 1.0f};
+    constexpr ImVec4 TEXT_SEC    = {0.545f, 0.580f, 0.620f, 1.0f};
+    constexpr ImVec4 TEXT_DIM    = {0.282f, 0.310f, 0.345f, 1.0f};
+    constexpr ImVec4 GREEN       = {0.247f, 0.725f, 0.314f, 1.0f};
+    constexpr ImVec4 RED         = {0.973f, 0.318f, 0.286f, 1.0f};
+    constexpr ImVec4 YELLOW      = {0.922f, 0.788f, 0.341f, 1.0f};
+    constexpr ImVec4 BLUE_TEXT   = {0.345f, 0.651f, 1.000f, 1.0f};
 }
 
 inline void Apply() {
     ImGuiStyle& s = ImGui::GetStyle();
 
-    // ── ZAOKRĄGLENIA ─────────────────────────────────────────────
     s.WindowRounding    = 8.0f;
     s.ChildRounding     = 6.0f;
     s.FrameRounding     = 5.0f;
@@ -39,7 +34,6 @@ inline void Apply() {
     s.GrabRounding      = 4.0f;
     s.TabRounding       = 4.0f;
 
-    // ── ODSTĘPY ──────────────────────────────────────────────────
     s.WindowPadding     = {12.0f, 10.0f};
     s.FramePadding      = {10.0f,  6.0f};
     s.ItemSpacing       = { 8.0f,  6.0f};
@@ -51,7 +45,6 @@ inline void Apply() {
     s.FrameBorderSize   = 0.0f;
     s.TabBorderSize     = 0.0f;
 
-    // ── KOLORY ───────────────────────────────────────────────────
     ImVec4* col = ImGui::GetStyle().Colors;
 
     col[ImGuiCol_WindowBg]             = C::BG_BASE;
@@ -118,7 +111,6 @@ inline void Apply() {
     col[ImGuiCol_TextDisabled]         = C::TEXT_DIM;
 }
 
-// Skróty do kolorów — używaj w render_*
 inline ImVec4 accent()    { return C::ACCENT;     }
 inline ImVec4 green()     { return C::GREEN;      }
 inline ImVec4 red()       { return C::RED;        }

@@ -10,7 +10,6 @@
 
 using json = nlohmann::json;
 
-// ── HELPERS ───────────────────────────────────────────────────────
 
 static std::string generate_transfer_id() {
     std::random_device rd;
@@ -21,7 +20,6 @@ static std::string generate_transfer_id() {
     return oss.str();
 }
 
-// ── AAD / SHA-3 ───────────────────────────────────────────────────
 
 Bytes FileSender::chunk_aad(const std::string& transfer_id, uint32_t chunk_index) {
     std::string s = "FILE|" + transfer_id + "|" + std::to_string(chunk_index);
@@ -48,7 +46,6 @@ Bytes FileSender::sha3_256(const Bytes& data) {
     return Bytes(digest, digest + digest_len);
 }
 
-// ── FileSenderSession ─────────────────────────────────────────────
 
 FileSenderSession FileSenderSession::open(const std::filesystem::path& file_path,
                                           const Bytes& aes_key,
@@ -95,24 +92,27 @@ bool FileSenderSession::send_start(const FileSender::SendCallback& on_packet) co
     return on_packet(j.dump());
 }
 
-bool FileSenderSession::send_chunk_packet(uint32_t index,
-                                          const FileSender::SendCallback& on_packet) const
-{
+json FileSenderSession::build_chunk_json(uint32_t index, const Bytes& aes_key) const {
     if (index >= m_total_chunks)
         throw std::runtime_error("Nieprawidłowy chunk_index: " + std::to_string(index));
 
     const Bytes& plain = m_chunks[index];
-    auto enc = AesGcm::encrypt(m_aes_key, plain,
-                               FileSender::chunk_aad(m_transfer_id, index));
+    auto enc = AesGcm::encrypt(aes_key, plain, FileSender::chunk_aad(m_transfer_id, index));
 
     json j;
     j["type"]        = "FILE_CHUNK";
     j["transfer_id"] = m_transfer_id;
     j["chunk_index"] = index;
-    j["chunk_hash"]  = FileSender::sha3_256(plain); // SHA-3 plaintextu — weryfikacja przed buforowaniem
+    j["chunk_hash"]  = FileSender::sha3_256(plain);
     j["nonce"]       = enc.nonce;
     j["payload"]     = enc.ciphertext;
-    return on_packet(j.dump());
+    return j;
+}
+
+bool FileSenderSession::send_chunk_packet(uint32_t index,
+                                          const FileSender::SendCallback& on_packet) const
+{
+    return on_packet(build_chunk_json(index, m_aes_key).dump());
 }
 
 bool FileSenderSession::send_chunk(uint32_t index,
@@ -147,7 +147,6 @@ bool FileSenderSession::retransmit(const std::vector<uint32_t>& indices,
     return true;
 }
 
-// ── FileSender::send (kompatybilność wsteczna) ────────────────────
 
 bool FileSender::send(const std::filesystem::path& file_path,
                       const Bytes& aes_key,
@@ -158,7 +157,6 @@ bool FileSender::send(const std::filesystem::path& file_path,
     return session.send_all(on_packet);
 }
 
-// ── IncomingFile ──────────────────────────────────────────────────
 
 Bytes IncomingFile::assemble() const {
     Bytes result;
@@ -172,7 +170,6 @@ Bytes IncomingFile::assemble() const {
     return result;
 }
 
-// ── FileReceiver ──────────────────────────────────────────────────
 
 void FileReceiver::on_start(const json& j) {
     std::string tid = j["transfer_id"];

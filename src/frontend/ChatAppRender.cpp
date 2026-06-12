@@ -4,9 +4,6 @@
 #include <algorithm>
 #include "../../third_party/portable-file-dialogs.h"
 
-// ══════════════════════════════════════════════════════════════════
-//  ChatAppRender.cpp
-// ══════════════════════════════════════════════════════════════════
 
 void ChatApp::render() {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -57,7 +54,7 @@ void ChatApp::render() {
             + std::max(input_h_est, 28.0f) + 36.0f;
         float avail_h = ImGui::GetContentRegionAvail().y - bottom_reserve;
         float rooms_w = 155.0f;
-        float hs_w    = 260.0f; // Lekko poszerzone dla Dashboardu
+        float hs_w    = 260.0f;
         float chat_w  = ImGui::GetContentRegionAvail().x - rooms_w - hs_w - 16.0f;
 
         render_rooms_sidebar(rooms_w, avail_h);
@@ -99,7 +96,6 @@ void ChatApp::render() {
     ImGui::End();
 }
 
-// ── STATUS BAR ────────────────────────────────────────────────────
 
 void ChatApp::render_status_bar() {
     if (m_logged_in) {
@@ -127,7 +123,6 @@ void ChatApp::render_status_bar() {
     ImGui::Separator();
 }
 
-// ── LOGIN PANEL ───────────────────────────────────────────────────
 
 void ChatApp::render_login_panel() {
     if (m_profiles_dirty) {
@@ -149,7 +144,6 @@ void ChatApp::render_login_panel() {
         "podpis ML-DSA w handshake'u.");
     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-    // ── ISTNIEJĄCE PROFILE ──
     ImGui::TextColored(Theme::secondary(), "PROFIL");
     if (m_profiles.empty()) {
         ImGui::TextColored(Theme::dim(), "(brak profili — utworz nowy ponizej)");
@@ -185,7 +179,6 @@ void ChatApp::render_login_panel() {
 
     ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
 
-    // ── NOWY PROFIL ──
     ImGui::TextColored(Theme::secondary(), "NOWY PROFIL");
     ImGui::SetNextItemWidth(-1);
     ImGui::InputTextWithHint("##newname", "nazwa [a-zA-Z0-9_-]",
@@ -208,7 +201,6 @@ void ChatApp::render_login_panel() {
                           std::string(m_new_prof_pass1_buf),
                           std::string(m_new_prof_pass2_buf));
 
-    // ── KOMUNIKATY ──
     if (!m_login_error.empty()) {
         ImGui::Spacing();
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 340.0f);
@@ -223,7 +215,6 @@ void ChatApp::render_login_panel() {
     ImGui::EndChild();
 }
 
-// ── SETUP PANEL ───────────────────────────────────────────────────
 
 void ChatApp::render_setup_panel() {
     ImGui::Spacing();
@@ -250,7 +241,6 @@ void ChatApp::render_setup_panel() {
 
     ImGui::SameLine();
     if (ImGui::Button("Browse##dir", {browse_btn_w, 0})) {
-        // Natywne okno wyboru FOLDERU
         auto folder = pfd::select_folder("Wybierz folder pobierania", m_download_dir_buf).result();
         if (!folder.empty()) {
             strncpy(m_download_dir_buf, folder.c_str(), sizeof(m_download_dir_buf) - 1);
@@ -288,7 +278,6 @@ void ChatApp::render_setup_panel() {
     ImGui::EndChild();
 }
 
-// ── ROOMS SIDEBAR ─────────────────────────────────────────────────
 
 void ChatApp::render_rooms_sidebar(float width, float height) {
     ImGui::BeginChild("rooms_sidebar", {width, height}, true);
@@ -356,7 +345,6 @@ void ChatApp::render_rooms_sidebar(float width, float height) {
     ImGui::EndChild();
 }
 
-// ── CHAT PANEL ────────────────────────────────────────────────────
 
 void ChatApp::render_chat_panel(float width, float height) {
     ImGui::BeginChild("chat_panel", {width, height}, true);
@@ -386,12 +374,10 @@ void ChatApp::render_chat_panel(float width, float height) {
     ImGui::EndChild();
 }
 
-// ── HANDSHAKE PANEL (Z Dashboardem) ───────────────────────────────
 
 void ChatApp::render_handshake_panel(float width, float height) {
     ImGui::BeginChild("hs_panel", {width, height}, true);
 
-    // ── SECURITY DASHBOARD ──
     ImGui::TextColored(Theme::dim(), "SECURITY DASHBOARD");
     ImGui::Separator();
 
@@ -429,11 +415,9 @@ void ChatApp::render_handshake_panel(float width, float height) {
     }
     ImGui::Spacing();
 
-    // ── HANDSHAKE STEPS ──
     ImGui::TextColored(Theme::dim(), "HANDSHAKE STEPS");
     ImGui::Separator();
 
-    // Panel ze scrollowaniem dla samych kroków handshake'a
     ImGui::BeginChild("hs_steps_list", {width - 16.f, 150.0f}, false);
     {
         std::lock_guard lock(m_hs_mtx);
@@ -457,7 +441,6 @@ void ChatApp::render_handshake_panel(float width, float height) {
     ImGui::EndChild();
     ImGui::Spacing();
 
-    // ── PEER TRUST (TOFU) ──
     {
         std::lock_guard lk(m_trust_mtx);
         if (m_has_peer_trust) {
@@ -489,7 +472,6 @@ void ChatApp::render_handshake_panel(float width, float height) {
         }
     }
 
-    // ── POZIOM PQC (tylko serwer moze zmieniac) ──
     if (m_mode == AppMode::SERVER && m_connected) {
         ImGui::Separator();
         ImGui::TextColored(Theme::dim(), "POZIOM PQC (serwer)");
@@ -522,9 +504,7 @@ void ChatApp::render_handshake_panel(float width, float height) {
         ImGui::Spacing();
     }
 
-    // ── TAMPER (klient) ──
     if (m_mode == AppMode::CLIENT && m_connected) {
-        // Tamper Button (z czerwonym trybem awaryjnym)
         bool ta = m_tamper;
         if (ta) {
             ImGui::PushStyleColor(ImGuiCol_Button,        {0.35f,0.06f,0.06f,1.f});
@@ -539,12 +519,10 @@ void ChatApp::render_handshake_panel(float width, float height) {
     ImGui::EndChild();
 }
 
-// ── INPUT BAR ─────────────────────────────────────────────────────
 
 void ChatApp::render_input_bar() {
     ImGui::Separator();
 
-    // --- PACKET INSPECTOR ---
     const float wire_w = ImGui::GetContentRegionAvail().x - 8.0f;
     ImGui::BeginChild("hex_view", {wire_w, 50.0f}, true);
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wire_w);
@@ -556,11 +534,9 @@ void ChatApp::render_input_bar() {
     ImGui::TextColored(Theme::green(), "%s", m_last_raw_cipher.c_str());
     ImGui::PopTextWrapPos();
     ImGui::EndChild();
-    // ------------------------
 
     ImGui::Spacing();
 
-    // ── PASKI POSTĘPU TRANSFERU (stała wysokość, przewijanie) ───────
     ImGui::BeginChild("file_xfers", {wire_w, 64.0f}, true);
     {
         std::lock_guard lk(m_file_progress_mtx);
@@ -603,13 +579,10 @@ void ChatApp::render_input_bar() {
         return;
     }
 
- // ── KONTROLKI PLIKÓW I CZATU ────────────────────────────────────
     float btn_w  = 80.0f;
     float path_w = 200.0f;
-    // Odejmujemy trzy przyciski (Send, Browse, Send File) i path_w
     float chat_w = ImGui::GetContentRegionAvail().x - (btn_w * 3) - path_w - 32.0f;
 
-    // Pole tekstowe czatu (zawijanie; Enter=wyslij, Ctrl+Enter=nowa linia)
     const float input_h = ImGui::GetTextLineHeightWithSpacing() * 1.5f;
     ImGui::SetNextItemWidth(chat_w);
     bool send = ImGui::InputTextMultiline(
@@ -619,7 +592,6 @@ void ChatApp::render_input_bar() {
         | ImGuiInputTextFlags_CtrlEnterForNewLine);
     ImGui::SameLine(0.0f, 8.0f);
 
-    // Przycisk wyślij tekst
     ImGui::PushStyleColor(ImGuiCol_Button,        Theme::accent());
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.216f,0.522f,1.f,1.f});
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  {0.08f,0.35f,0.75f,1.f});
@@ -630,14 +602,11 @@ void ChatApp::render_input_bar() {
     ImGui::TextColored(Theme::dim(), "|");
     ImGui::SameLine();
 
-    // Pole na ścieżkę do pliku
     ImGui::SetNextItemWidth(path_w);
     ImGui::InputTextWithHint("##filepath", "Wybierz plik...", m_filepath_buf, sizeof(m_filepath_buf));
     ImGui::SameLine();
 
-    // PRZYCISK BROWSE... (uruchamia systemowe okno wyboru)
     if (ImGui::Button("Browse...", {btn_w, 0})) {
-        // Blokuje wątek do czasu wybrania pliku, używając natywnego okna OS
         auto selection = pfd::open_file("Wybierz plik do wysłania").result();
         if (!selection.empty()) {
             strncpy(m_filepath_buf, selection[0].c_str(), sizeof(m_filepath_buf) - 1);
@@ -645,12 +614,11 @@ void ChatApp::render_input_bar() {
     }
     ImGui::SameLine();
 
-    // Przycisk wyślij plik
     if (ImGui::Button("Send File", {btn_w, 0})) {
         std::filesystem::path p(m_filepath_buf);
         if (std::filesystem::exists(p) && std::filesystem::is_regular_file(p)) {
             send_file(p);
-            m_filepath_buf[0] = '\0'; // wyczyść po wysłaniu
+            m_filepath_buf[0] = '\0';
         } else {
             log("[FILE ERROR] Plik nie istnieje: " + std::string(m_filepath_buf), Theme::red(), m_current_room);
         }
@@ -663,7 +631,6 @@ void ChatApp::render_input_bar() {
     }
 }
 
-// ── BENCHMARK WINDOW ──────────────────────────────────────────────
 
 void ChatApp::render_benchmark_window() {
     ImGui::SetNextWindowSize({660, 420}, ImGuiCond_Once);
@@ -724,7 +691,6 @@ void ChatApp::render_benchmark_window() {
     ImGui::End();
 }
 
-// ── TRUSTED PEERS WINDOW (known_hosts) ────────────────────────────
 
 void ChatApp::render_trusted_window() {
     ImGui::SetNextWindowSize({640, 360}, ImGuiCond_Once);
@@ -789,7 +755,6 @@ void ChatApp::render_trusted_window() {
     ImGui::End();
 }
 
-// ── SECURITY ESTIMATES WINDOW ─────────────────────────────────────
 
 void ChatApp::render_security_window() {
     ImGui::SetNextWindowSize({700, 400}, ImGuiCond_Once);
@@ -822,10 +787,9 @@ void ChatApp::render_security_window() {
     ImGui::End();
 }
 
-// ── POMOCNICZE (Rozmiary dla UI) ──────────────────────────────────
 
 CryptoStats ChatApp::get_crypto_stats(const std::string& level) {
     if (level == "FAST")     return {"ML-KEM-512",  "ML-DSA-44", 800,  2420};
     if (level == "MAX")      return {"ML-KEM-1024", "ML-DSA-87", 1568, 4627};
-    return {"ML-KEM-768", "ML-DSA-65", 1184, 3309}; // BALANCED (Default)
+    return {"ML-KEM-768", "ML-DSA-65", 1184, 3309};
 }

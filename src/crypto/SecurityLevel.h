@@ -1,5 +1,4 @@
 //
-// Created by smitchelld on 20.04.2026.
 //
 
 #ifndef QUILL_SECURITYLEVEL_H

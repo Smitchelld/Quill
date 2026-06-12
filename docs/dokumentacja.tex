@@ -3,8 +3,9 @@
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage[english]{babel}
-\usepackage{geometry}
+\usepackage[a4paper, top=1.25in, bottom=1.0in, left=1.5in, right=1.0in]{geometry}
 \usepackage{graphicx}
+\usepackage{epstopdf}
 \usepackage{booktabs}
 \usepackage{longtable}
 \usepackage{array}
@@ -14,10 +15,14 @@
 \usepackage{enumitem}
 \usepackage{amsmath}
 \usepackage{float}
+\usepackage{setspace}
 
-\geometry{margin=2.5cm}
+\onehalfspacing
 \setlength{\parskip}{0.5em}
 \setlength{\parindent}{0pt}
+
+\newcommand{\aghdept}{EAIiIB / Katedra Informatyki Stosowanej}
+\newcommand{\aghuni}{Akademia Górniczo-Hutnicza im. Stanisława Staszica w Krakowie}
 
 \hypersetup{
     colorlinks=true,
@@ -47,26 +52,39 @@
     language=bash
 }
 
-\title{%
-    \textbf{Quill}\\
-    \large Post-kwantowy komunikator P2P z szyfrowaniem sesji\\
-    \normalsize Dokumentacja techniczna projektu\\
-    \small Studio Projektowe, semestr 6
+\newcommand{\aghTitlePage}{%
+  \thispagestyle{empty}
+  \begin{center}
+    \vspace*{\stretch{2}}
+    \textbf{\Large\textsc{Dokumentacja techniczna projektu}}\\[0.6em]
+    \textbf{\Large\textsc{Quill}}\\[0.4em]
+    \textbf{\large Post-kwantowy komunikator P2P z szyfrowaniem sesji}
+    \vspace*{\stretch{1}}
+    \textbf{\large\textsc{Studio Projektowe, semestr 6}}\\
+    \textbf{\large\textsc{Informatyka i Systemy Inteligentne}}
+    \vspace*{\stretch{2}}
+    {\large Autorzy projektu}\\[0.8em]
+    {\large Szymon Kowalski}\\[0.3em]
+    {\large Micha{\l} Kr\'{o}l}
+    \vfill
+    \includegraphics[height=40mm]{agh_logo.pdf}\\[1.0em]
+    \large \aghdept\\[0.4em]
+    {\Large \aghuni}\\[0.4em]
+    Krak\'{o}w, Polska\\[1.2em]
+    Czerwiec 2026 \quad wersja 1.0.0
+    \vspace*{\stretch{1}}
+  \end{center}
 }
-\author{%
-    AGH UST, Wydział Informatyki\\
-    Kierunek: Informatyka i Systemy Inteligentne\\[0.8em]
-    \textit{[Imię i nazwisko autora/autorów]}
-}
-\date{Czerwiec 2026 \quad wersja 1.0.0}
 
 \begin{document}
 
-\maketitle
+\aghTitlePage
+\newpage
+\setcounter{page}{1}
 
 \begin{abstract}
 \noindent
-\textbf{Quill} to komunikator sieciowy napisany w C++23, w którym cała warstwa asymetryczna opiera się na standardach post-kwantowych NIST (FIPS~203 ML-KEM, FIPS~204 ML-DSA). Projekt implementuje własny protokół handshake, szyfrowanie sesji AES-256-GCM z ochroną przed replay, mechanizm TOFU, trwałe profile użytkownika oraz transfer plików z integralnością SHA-3. Aplikacja posiada interfejs ImGui oraz bibliotekę rdzeniową \texttt{quill\_core} testowaną 97 testami Google Test i weryfikowaną w CI na GitHub Actions.
+\textbf{Quill} to komunikator sieciowy napisany w C++23, w którym cała warstwa asymetryczna opiera się na standardach post-kwantowych NIST (FIPS~203 ML-KEM, FIPS~204 ML-DSA). Projekt implementuje własny protokół handshake, szyfrowanie sesji AES-256-GCM z ochroną przed replay, mechanizm TOFU, trwałe profile użytkownika, pokoje z hasłem oraz transfer plików z integralnością SHA-3. Aplikacja posiada interfejs ImGui oraz bibliotekę rdzeniową \texttt{quill\_core} testowaną 105 testami Google Test i weryfikowaną w CI na GitHub Actions.
 
 \medskip
 \noindent\textbf{Słowa kluczowe:} kryptografia post-kwantowa, ML-KEM, ML-DSA, AES-GCM, TOFU, komunikator P2P, C++23.
@@ -83,7 +101,7 @@
 
 Projekt \textbf{Quill} powstał w ramach przedmiotu \emph{Studio Projektowe} na 6. semestrze studiów inżynierskich na Akademii Górniczo-Hutniczej w Krakowie, na kierunku Informatyka i Systemy Inteligentne. Celem było zaprojektowanie i implementacja działającego systemu komunikacji, który nie opiera się na klasycznej kryptografii asymetrycznej podatnej na ataki kwantowe, lecz na algorytmach zatwierdzonych przez NIST w 2024 roku.
 
-Quill nie jest wrapperem TLS ani gotowym protokołem aplikacyjnym --- implementuje własny stos od warstwy transportowej (TCP) po szyfrowanie wiadomości, z pełną kontrolą nad każdym krokiem handshake i każdym bajtem na linii. Taki poziom szczegółowości jest celowy: projekt ma być obronny akademicko i stanowić fundament planowanej pracy inżynierskiej na temat inteligentnego doboru algorytmów PQC w zależności od kontekstu (urządzenie, opóźnienie, wymagana siła kryptograficzna).
+Quill nie jest wrapperem TLS ani gotowym protokołem aplikacyjnym --- implementuje własny stos od warstwy transportowej (TCP) po szyfrowanie wiadomości, z pełną kontrolą nad każdym krokiem handshake i każdym bajtem na linii. Taki poziom szczegółowości jest celowy: projekt ma być obronny akademicko w ramach Studio Projektowego i pokazywać pełny cykl projektowania bezpiecznego systemu komunikacji.
 
 \subsection{Cel i zakres}
 
@@ -96,7 +114,7 @@ Quill nie jest wrapperem TLS ani gotowym protokołem aplikacyjnym --- implementu
     \item możliwy jest bezpieczny transfer plików z weryfikacją integralności.
 \end{enumerate}
 
-\textbf{Zakres zrealizowany} obejmuje m.in.: handshake PQC, trzy poziomy bezpieczeństwa (FAST/BALANCED/MAX), Perfect Forward Secrecy, pokoje rozmów, interfejs graficzny z narzędziami audytowymi, 97 testów automatycznych oraz pipeline CI.
+\textbf{Zakres zrealizowany} obejmuje m.in.: handshake PQC, trzy poziomy bezpieczeństwa (FAST/BALANCED/MAX), Perfect Forward Secrecy, pokoje rozmów z trwałym zapisem i hasłem, interfejs graficzny z narzędziami audytowymi, 105 testów automatycznych oraz pipeline CI.
 
 \textbf{Poza zakresem} (świadomie odłożone): NAT traversal (UDP hole punching), prawdziwy end-to-end bez zaufania do serwera-relay, wersjonowanie schematu JSON protokołu, streaming plików bez buforowania w RAM.
 
@@ -216,7 +234,7 @@ main.cpp
               └── protocol/  MessageFormat, FileTransfer
 \end{lstlisting}
 
-\textbf{Decyzja projektowa:} separacja \texttt{quill\_core} od UI umożliwia uruchomienie 97 testów i CI bez GLFW/OpenGL/ImGui. Ta sama logika kryptograficzna działa w aplikacji i w testach integracyjnych (\texttt{socketpair}).
+\textbf{Decyzja projektowa:} separacja \texttt{quill\_core} od UI umożliwia uruchomienie 105 testów i CI bez GLFW/OpenGL/ImGui. Ta sama logika kryptograficzna działa w aplikacji i w testach integracyjnych (\texttt{socketpair}).
 
 \subsection{Model hub-and-spoke}
 
@@ -241,6 +259,8 @@ Serwer utrzymuje mapę \texttt{m\_rooms}: nazwa pokoju $\rightarrow$ zbiór klie
 \textbf{Broadcast} (\texttt{broadcast\_to\_room}) wysyła wiadomość do wszystkich uczestników pokoju oprócz nadawcy. Wiadomości z innych pokoi nie docierają do odbiorców --- izolacja na poziomie aplikacji (serwer filtruje po polu \texttt{room}).
 
 Każdy klient w pokoju ma osobny klucz sesji AES (osobny handshake przy połączeniu). Serwer musi więc odszyfrować wiadomość od nadawcy i zaszyfrować ją osobno dla każdego odbiorcy --- stąd model hub-and-spoke opisany w rozdz.~4.
+
+\textbf{RoomStore} (\texttt{rooms.json} w katalogu profilu) utrwala listę pokoi między uruchomieniami serwera. Pokój \texttt{general} jest domyślny i nieusuwalny. Pokoje chronione hasłem przechowują weryfikator Argon2id (salt + hash). Protokół obsługuje m.in.\ \texttt{CREATE\_ROOM}, \texttt{ROOM\_CREATED}, \texttt{ROOM\_EXISTS}, \texttt{ROOM\_DELETED}, \texttt{JOIN\_DENIED} oraz \texttt{ROOM\_LIST} z flagą \texttt{protected}. Poziom PQC ustala serwer (\texttt{SERVER\_CONFIG} przed handshake).
 
 \subsection{Historia decyzji projektowych}
 
@@ -274,7 +294,7 @@ Quill/
     network/               # Socket, Server, Client
     protocol/              # MessageFormat, FileTransfer
     frontend/              # ChatApp, Theme, render
-  tests/                   # 11 plików testowych, 97 przypadków
+  tests/                   # 12 plików testowych, 105 przypadków
   third_party/
     imgui/                 # git submodule v1.92.8
     portable-file-dialogs/   # wybór plików w GUI
@@ -569,7 +589,7 @@ Quill używa wyłącznie TCP IPv4/IPv6. Brak:
     \item kompresji payloadu.
 \end{itemize}
 
-Oba peeri muszą być osiągalne pod znanym adresem IP i portem (np.\ localhost dla demo, sieć LAN dla prezentacji).
+Oba peeri muszą być osiągalne pod znanym adresem IP i portem (np.\ localhost dla demo lub sieć LAN w laboratorium).
 
 % ═══════════════════════════════════════════════════════════════════
 \section{Tożsamość, profile i zaufanie}
@@ -601,7 +621,7 @@ Trwała tożsamość kryptograficzna --- para kluczy DSA generowana raz i przech
 
 \subsection{ProfileManager}
 
-Profil = katalog z \texttt{profile.json} + pliki kluczy.
+Profil = katalog z \texttt{profile.json}, podkatalogiem \texttt{identity/}, plikami \texttt{known\_hosts}, \texttt{rooms.json} oraz opcjonalnie \texttt{.session.lock} (blokada jednej aktywnej sesji GUI).
 
 \textbf{Tworzenie profilu:}
 \begin{itemize}
@@ -616,7 +636,7 @@ Profil = katalog z \texttt{profile.json} + pliki kluczy.
     \item \texttt{QUILL\_IDENTITY\_DIR} --- katalog tożsamości (fallback).
 \end{itemize}
 
-\textbf{Logout:} czyści passphrase i klucze tajne z pamięci (\texttt{OPENSSL\_cleanse}); zablokowany w trakcie aktywnej sesji sieciowej (klucze potrzebne do PFS).
+\textbf{Logout:} rozłącza sesję sieciową, czyści passphrase i klucze tajne z pamięci (\texttt{OPENSSL\_cleanse}). \textbf{Usuwanie profilu} wymaga potwierdzenia hasłem w oknie modalnym.
 
 \subsection{TrustStore (TOFU)}
 
@@ -710,16 +730,16 @@ Dear ImGui v1.92.8 (git submodule), backend GLFW + OpenGL 3.3. Renderowanie w p�
 \toprule
 \textbf{Panel} & \textbf{Funkcja} \\
 \midrule
-Login & Lista profili, tworzenie (passphrase $\times$2), odblokowanie \\
-Setup & Tryb Server/Client, host, port, poziom bezpieczeństwa \\
-Chat & Wiadomości, wybór pokoju, licznik wiadomości \\
+Login & Lista profili, tworzenie (passphrase $\times$2), odblokowanie, usuwanie profilu \\
+Setup & Tryb Server/Client, host, port; poziom PQC tylko po stronie serwera \\
+Chat & Wiadomości z zawijaniem, wybór pokoju, tworzenie/usuwanie pokoi \\
 Handshake & Wizualizator kroków z czasami ms, stan TOFU \\
 Security Dashboard & Szacunki czasu złamania, rozmiary kluczy \\
 Benchmarks & Pomiar FAST/BALANCED/MAX (keygen, encaps, sign...) \\
 Tools & Packet Inspector (hex dump), symulator Tamper (MITM) \\
-File transfer & Wybór pliku (portable-file-dialogs), postęp, folder pobrań \\
+File transfer & Wybór pliku (portable-file-dialogs), panel postępu (scroll), folder pobrań \\
 Trusted Peers & Lista known\_hosts, Verify, Remove \\
-Profile menu & Fingerprint, logout (zablokowany w sesji) \\
+Profile menu & Fingerprint, logout, delete profile (modal + hasło) \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -746,7 +766,7 @@ Dla RSA/ECDH werdykt byłby „podatny"; dla ML-KEM/ML-DSA --- „odporny na kwa
 
 \subsection{Narzędzia audytowe}
 
-\textbf{Packet Inspector} --- podgląd ostatnich pakietów w formie hex + ASCII (edukacyjny, do prezentacji).
+\textbf{Packet Inspector} --- podgląd ostatnich pakietów w formie hex + ASCII (edukacyjny, do audytu protokołu).
 
 \textbf{Tamper simulator} --- celowa modyfikacja bajtu w pakiecie handshake lub sesji, demonstracja odrzucenia przez weryfikację GCM/podpisu.
 
@@ -797,20 +817,7 @@ Dla RSA/ECDH werdykt byłby „podatny"; dla ML-KEM/ML-DSA --- „odporny na kwa
 \begin{enumerate}
     \item Otwórz panel Benchmarks; uruchom dla FAST, BALANCED, MAX.
     \item Porównaj \texttt{total\_hs\_ms} --- FAST najszybszy, MAX najwolniejszy.
-    \item Wyniki do prezentacji: kompromis bezpieczeństwo vs.\ wydajność.
-\end{enumerate}
-
-\subsection{Scenariusz 6: Prezentacja na zajęciach}
-
-Typowy przebieg demo ($\sim$15 minut):
-\begin{enumerate}
-    \item Slajd: motywacja PQC (Shor, NIST 2024).
-    \item Uruchomienie dwóch instancji; pokaz fingerprintów.
-    \item Handshake visualizer --- omówienie kroków i czasów ms.
-    \item Wysłanie wiadomości; Packet Inspector (zaszyfrowany payload).
-    \item Tamper simulator --- pokaz odrzucenia przez GCM.
-    \item Zmiana klucza serwera --- alert TOFU MISMATCH.
-    \item Transfer małego pliku; opcjonalnie Security Dashboard.
+    \item Oceń kompromis bezpieczeństwo vs.\ wydajność dla wybranego poziomu.
 \end{enumerate}
 
 % ═══════════════════════════════════════════════════════════════════
@@ -857,7 +864,7 @@ Testy w katalogu \texttt{tests/} linkują wyłącznie \texttt{quill\_core} + Goo
     \item testy wszystkich trzech poziomów bezpieczeństwa (parametryzacja GTest).
 \end{itemize}
 
-\subsection{Katalog testów (97 przypadków)}
+\subsection{Katalog testów (105 przypadków)}
 
 \subsubsection{test\_hkdf.cpp (6)}
 \texttt{Rfc5869TestCase1}, \texttt{Rfc5869TestCase3}, \texttt{ClientServerSymmetry}, \texttt{DomainSeparationByLevel}, \texttt{TranscriptBinding}, \texttt{RejectsEmptyIkm}.
@@ -877,11 +884,14 @@ Parametryzacja $\times$4 testy $\times$3 poziomy + \texttt{LevelAlgorithmMapping
 \subsubsection{test\_identity.cpp (10)}
 Plaintext persist, reload, encrypted save/load, wrong passphrase, encrypted without passphrase, QID1$\rightarrow$QID2 migration, loose permissions, corrupted key, per-algorithm identities, fingerprint format.
 
-\subsubsection{test\_profile.cpp (10)}
-Create/unlock, wrong/empty/short/repeated passphrase, duplicate name, path traversal, list profiles, failed create cleanup, unknown profile.
+\subsubsection{test\_profile.cpp (11)}
+Create/unlock, wrong/empty/short/repeated passphrase, duplicate name, path traversal, list profiles, failed create cleanup, unknown profile, remove requires correct passphrase.
 
-\subsubsection{test\_truststore.cpp (7)}
-First contact UNVERIFIED, second KNOWN, mark VERIFIED, MISMATCH preserves entry, remove allows fresh TOFU, distinct peers per host:port, corrupted known\_hosts hard error.
+\subsubsection{test\_roomstore.cpp (6)}
+Default \texttt{general}, protected room verify, persistence across reload, duplicate add throws, remove room, cannot remove \texttt{general}.
+
+\subsubsection{test\_truststore.cpp (8)}
+First contact UNVERIFIED, second KNOWN, mark VERIFIED, algo rotation when allowed, MISMATCH preserves entry, remove allows fresh TOFU, distinct peers per host:port, corrupted known\_hosts hard error.
 
 \subsubsection{test\_messageformat.cpp (3)}
 Serialize roundtrip, binary payload all byte values, malformed throws.
@@ -895,11 +905,10 @@ Same session key both sides, all security levels, re-handshake fresh key + KNOWN
 \subsection{Uruchamianie testów}
 
 \begin{lstlisting}[style=bash]
-cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make -j$(nproc)
-./quill_tests                    # bezposrednio
-ctest --output-on-failure        # przez CTest
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DQUILL_BUILD_GUI=OFF
+cmake --build build -j$(nproc)
+./build/quill_tests              # bezposrednio
+ctest --test-dir build --output-on-failure
 \end{lstlisting}
 
 \subsection{CI GitHub Actions}
@@ -951,7 +960,7 @@ cd Quill
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
-./quill_tests    # 97/97
+./quill_tests    # 105/105
 ./Quill          # GUI
 \end{lstlisting}
 
@@ -974,7 +983,7 @@ Projekt nie dostarcza oficjalnego pakietu .deb/.pkg. Możliwe kierunki: Docker z
     \item Zero klasycznej asymetrii w protokole --- zgodność z celem PQC.
     \item Fail-closed: TOFU MISMATCH, replay, GCM tag failure --- wszystko odrzuca, nie degraduje.
     \item Separacja \texttt{quill\_core} --- logika krypto testowalna bez UI.
-    \item 97 testów z scenariuszami ataku (MITM, tamper, injection).
+    \item 105 testów z scenariuszami ataku (MITM, tamper, injection).
     \item Klucze at rest chronione Argon2id (memory-hard).
     \item PFS przez efemeryczny Kyber per sesję/rotację.
 \end{itemize}
@@ -1021,57 +1030,42 @@ OpenSSL wersje & Dual backend Argon2 & Złożoność build, ale pokryta CI \\
 \end{longtable}
 
 % ═══════════════════════════════════════════════════════════════════
-\section{Podsumowanie i dalsza praca}
+\section{Podsumowanie}
 % ═══════════════════════════════════════════════════════════════════
 
-\subsection{Podział prac (przykładowy)}
+\subsection{Podział prac}
 
-W projekcie zespołowym (2 osoby) naturalny podział:
+Projekt zrealizowano w zespole dwuosobowym:
 \begin{itemize}
-    \item \textbf{Warstwa krypto + protokół:} CryptoManager, TOFU, HKDF, testy integracyjne,
-    \item \textbf{Sieć + UI:} NetworkServer/Client, ChatApp, ImGui, transfer plików,
-    \item \textbf{Wspólne:} review bezpieczeństwa, dokumentacja, prezentacja.
+    \item \textbf{Szymon Kowalski} --- kryptografia i protokół (\texttt{CryptoManager}, TOFU, HKDF), profile i \texttt{RoomStore}, testy automatyczne,
+    \item \textbf{Micha{\l} Kr\'{o}l} --- warstwa sieciowa, interfejs ImGui (\texttt{ChatApp}/\texttt{ChatAppRender}), transfer plików, integracja UI z protokołem,
+    \item \textbf{Wspólnie} --- review bezpieczeństwa, dokumentacja techniczna, scenariusze testowe.
 \end{itemize}
-
-\noindent\textit{[Uzupełnij rzeczywistym podziałem w zespole.]}
 
 \subsection{Osiągnięcia}
 
 Quill v1.0.0 dostarcza działający komunikator post-kwantowy z:
 \begin{itemize}
     \item pełnym handshake ML-KEM + ML-DSA/Falcon,
-    \item trzema poziomami bezpieczeństwa,
+    \item trzema poziomami bezpieczeństwa (ustawianymi przez serwer),
     \item szyfrowaną sesją AES-256-GCM z anty-replay,
     \item TOFU fail-closed,
-    \item profilami i szyfrowaniem kluczy Argon2id,
+    \item profilami, pokojami z hasłem i szyfrowaniem kluczy Argon2id,
     \item transferem plików z SHA-3 i selective repeat,
     \item interfejsem ImGui z narzędziami edukacyjnymi,
-    \item 97 testami i CI.
+    \item 105 testami i CI.
 \end{itemize}
 
-Projekt jest gotowy do prezentacji i oddania w ramach Studio Projektowego, z jawnie opisanymi ograniczeniami architektonicznymi.
+Projekt jest gotowy do oddania w ramach Studio Projektowego, z jawnie opisanymi ograniczeniami architektonicznymi (hub-and-spoke, brak NAT traversal).
 
-\subsection{Planowana praca inżynierska}
+\subsection{Możliwe kierunki rozwoju (poza zakresem studiów)}
 
-Temat: \emph{inteligentny dobór poziomu PQC} (FAST/BALANCED/MAX) w zależności od:
 \begin{itemize}
-    \item opóźnienia sieci (RTT),
-    \item mocy obliczeniowej urządzenia,
-    \item wymaganego poziomu bezpieczeństwa (klasyfikacja danych),
-    \item zużycia baterii (urządzenia mobilne/IoT).
+    \item NAT traversal (UDP hole punching + rendezvous),
+    \item streaming plików bez pełnego buforu RAM,
+    \item wersjonowanie protokołu JSON,
+    \item prawdziwy end-to-end bez zaufania do serwera-relay.
 \end{itemize}
-
-Quill dostarcza już benchmarki per poziom --- naturalny punkt wyjścia do heurystyk lub modelu ML.
-
-\subsection{Roadmapa techniczna}
-
-\begin{enumerate}
-    \item NAT traversal (UDP hole punching + rendezvous) --- jedyny duży brakujący feature,
-    \item opcjonalnie: ASan/UBSan w CI,
-    \item opcjonalnie: streaming plików bez pełnego buforu RAM,
-    \item opcjonalnie: wersjonowanie protokołu JSON,
-    \item długoterminowo: prawdziwy E2E (double ratchet / per-recipient keys).
-\end{enumerate}
 
 % ═══════════════════════════════════════════════════════════════════
 \appendix
@@ -1148,7 +1142,25 @@ Przy deszyfracji odbiorca:
     \item sprawdza \texttt{seq > recv\_seq}, aktualizuje \texttt{recv\_seq}.
 \end{enumerate}
 
-\section{Załącznik E: Format pliku known\_hosts}
+\section{Załącznik E: Format pliku rooms.json}
+
+\begin{lstlisting}[style=json]
+{
+  "rooms": [
+    { "name": "general", "protected": false },
+    {
+      "name": "secret",
+      "protected": true,
+      "salt": [/* 16 bajtow */],
+      "verifier": [/* hash Argon2id */]
+    }
+  ]
+}
+\end{lstlisting}
+
+Plik zapisywany atomowo w katalogu aktywnego profilu (\texttt{RoomStore}), chmod 0600.
+
+\section{Załącznik F: Format pliku known\_hosts}
 
 \begin{lstlisting}[style=json]
 {
@@ -1165,7 +1177,7 @@ Przy deszyfracji odbiorca:
 
 Plik zapisywany atomowo, chmod 0600. Uszkodzony JSON powoduje twardy błąd --- brak cichego nadpisania (test \texttt{CorruptedKnownHostsIsHardError}).
 
-\section{Załącznik F: Lista plików źródłowych quill\_core}
+\section{Załącznik G: Lista plików źródłowych quill\_core}
 
 \begin{lstlisting}[style=bash]
 src/crypto/KyberKEM.cpp
@@ -1175,6 +1187,7 @@ src/crypto/Hkdf.cpp
 src/crypto/Argon2.cpp
 src/crypto/IdentityManager.cpp
 src/crypto/ProfileManager.cpp
+src/crypto/RoomStore.cpp
 src/crypto/TrustStore.cpp
 src/crypto/CryptoManager.cpp
 src/network/Socket.cpp

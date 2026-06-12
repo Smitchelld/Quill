@@ -1,9 +1,7 @@
 #include "MessageFormat.h"
 #include <chrono>
 
-// Bajty jako tablice JSON — json::binary nie przeżywa dump()/parse()
-// (tekstowy JSON nie ma typu binarnego), a wire format Quill to tekstowy
-// JSON z length-prefixem. Spójne z formatem używanym w ChatApp.
+// JSON byte arrays: nlohmann::binary does not survive dump()/parse() on wire JSON.
 Bytes SecureMessage::serialize() const {
     json j;
     j["t"] = static_cast<int>(type);

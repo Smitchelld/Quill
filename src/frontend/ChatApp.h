@@ -27,8 +27,6 @@
 using json  = nlohmann::json;
 using Bytes = std::vector<uint8_t>;
 
-// ── TYPY ──────────────────────────────────────────────────────────
-
 enum class AppMode { NONE, SERVER, CLIENT };
 
 struct ChatMessage {
@@ -41,7 +39,6 @@ struct HandshakeStep {
     double      time_ms;
 };
 
-// Szacowany czas złamania — wyświetlany w UI
 struct SecurityEstimate {
     std::string algorithm;
     std::string classical_supercomputer;
@@ -50,7 +47,6 @@ struct SecurityEstimate {
     ImVec4      verdict_color;
 };
 
-// Wyniki benchmarku
 struct BenchmarkResult {
     std::string level;
     double      keygen_ms;
@@ -64,7 +60,6 @@ struct BenchmarkResult {
     bool        done = false;
 };
 
-// Statystyki dla Security Dashboard
 struct CryptoStats {
     std::string kem_name;
     std::string dsa_name;
@@ -77,15 +72,11 @@ struct ConnectedClient {
     Bytes                   aes_key;
     std::string             name;
     std::string             room = "general";
-    // Liczniki anty-replay per kierunek (resetowane przy rotacji klucza/PFS)
-    uint64_t                send_seq = 0;  // serwer -> ten klient
-    uint64_t                recv_seq = 0;  // ostatni seq odebrany od klienta
-    // Rotacja PFS inicjowana przez serwer (auto co N wiadomości); chronione m_clients_mtx
+    uint64_t                send_seq = 0;
+    uint64_t                recv_seq = 0;
     bool                    pending_pfs_rotation = false;
-    std::string             pending_pfs_level;    // pusty => biezacy security_level()
+    std::string             pending_pfs_level;
 };
-
-// ── CHATAPP ───────────────────────────────────────────────────────
 
 class ChatApp {
 public:
@@ -94,18 +85,16 @@ public:
     void render();
 
 private:
-    // ── TRYB ────────────────────────────────────────────────────
     AppMode     m_mode      = AppMode::NONE;
 
-    // ── PROFIL / LOGOWANIE ───────────────────────────────────────
     bool        m_logged_in = false;
     std::string m_profile_name;
     std::string m_my_fingerprint;
     bool        m_profile_encrypted = false;
 
-    std::vector<ProfileInfo> m_profiles;        // cache listy do UI
+    std::vector<ProfileInfo> m_profiles;
     int         m_selected_profile = -1;
-    bool        m_profiles_dirty   = true;      // odśwież listę przy wejściu
+    bool        m_profiles_dirty   = true;
     char        m_login_pass_buf[256]{};
     char        m_new_prof_name_buf[64]{};
     char        m_new_prof_pass1_buf[256]{};
@@ -113,59 +102,48 @@ private:
     std::string m_login_error;
     std::string m_login_info;
 
-    // ── TOFU / ZAUFANIE PEERA ────────────────────────────────────
     std::mutex  m_trust_mtx;
-    bool        m_has_peer_trust = false;   // czy klient ma aktywną ocenę peera
+    bool        m_has_peer_trust = false;
     TrustState  m_peer_trust = TrustState::UNVERIFIED;
-    std::string m_peer_id;                  // "srv:host:port"
+    std::string m_peer_id;
     std::string m_peer_fp;
 
-    bool                    m_show_trusted = false;  // okno Trusted Peers
+    bool                    m_show_trusted = false;
     std::vector<TrustEntry> m_trust_list;
     bool                    m_trust_list_dirty = true;
 
-    // ── SESJA KLIENTA ────────────────────────────────────────────
     Bytes       m_session_key;
     std::mutex  m_session_mtx;
     std::atomic<bool> m_connected{false};
 
-    // Liczniki anty-replay (klient). Resetowane po każdym handshake/rotacji.
-    std::atomic<uint64_t> m_send_seq{0};  // klient -> serwer
-    std::atomic<uint64_t> m_recv_seq{0};  // ostatni seq odebrany od serwera
+    std::atomic<uint64_t> m_send_seq{0};
+    std::atomic<uint64_t> m_recv_seq{0};
 
-    // ── SERWER ───────────────────────────────────────────────────
     std::unique_ptr<NetworkServer>       m_server;
     std::vector<ConnectedClient>         m_clients;
     std::mutex                           m_clients_mtx;
 
-    // ── SOCKET KLIENTA ───────────────────────────────────────────
     std::unique_ptr<NetworkClient>  m_client;
     std::mutex                      m_client_send_mtx;
 
-    // ── POKOJE ───────────────────────────────────────────────────
     std::map<std::string, std::set<std::string>> m_rooms;
     std::mutex                                    m_rooms_mtx;
     std::string  m_current_room = "general";
 
-    // ── LOG CZATU per pokój ───────────────────────────────────────
     std::map<std::string, std::deque<ChatMessage>> m_room_logs;
     std::mutex                                      m_log_mtx;
 
-    // ── HANDSHAKE VISUALIZER ─────────────────────────────────────
     std::deque<HandshakeStep> m_hs_steps;
     std::mutex                m_hs_mtx;
     double                    m_hs_total_ms = 0.0;
 
-    // ── BENCHMARKI ───────────────────────────────────────────────
     std::vector<BenchmarkResult> m_benchmarks;
     std::mutex                   m_bench_mtx;
     bool                         m_bench_running = false;
     bool                         m_show_benchmarks = false;
 
-    // ── SECURITY ESTIMATES ───────────────────────────────────────
     bool m_show_security = false;
 
-    // ── UI STATE ─────────────────────────────────────────────────
     char        m_input_buf[2048]{};
     char        m_host_buf[64]{"127.0.0.1"};
     int         m_port           = 7777;
@@ -180,7 +158,7 @@ private:
     char        m_delete_pass_buf[256]{};
     bool        m_delete_modal_open   = false;
     std::string m_pending_join_room;
-    std::map<std::string, bool> m_room_protected; // cache z ROOM_LIST
+    std::map<std::string, bool> m_room_protected;
 
     std::string m_last_raw_nonce = "N/A";
     std::string m_last_raw_cipher = "N/A";
@@ -188,7 +166,6 @@ private:
     char m_filepath_buf[512]{};
     char m_download_dir_buf[512]{"received_files"};
 
-    // ── FILE TRANSFER ────────────────────────────────────────────
     FileReceiver              m_file_receiver;
     std::mutex                m_file_receiver_mtx;
 
@@ -203,15 +180,15 @@ private:
     std::map<std::string, FileTransferProgress> m_file_progress;
     std::mutex                                  m_file_progress_mtx;
 
-    // Aktywne wysyłki (selective repeat — sesja trzymana do retransmisji)
     std::map<std::string, FileSenderSession>    m_outbound_sessions;
     std::mutex                                  m_outbound_mtx;
 
-    // Serwer: socket nadawcy per transfer_id (przekazywanie FILE_NACK)
     std::map<std::string, std::weak_ptr<Socket>> m_file_origin_sock;
     std::mutex                                   m_file_origin_mtx;
 
-    // ── RENDER ───────────────────────────────────────────────────
+    std::set<std::string> m_server_file_origins;
+    std::mutex            m_server_file_mtx;
+
     void render_login_panel();
     void render_setup_panel();
     void render_status_bar();
@@ -223,7 +200,6 @@ private:
     void render_trusted_window();
     void render_rooms_sidebar(float width, float height);
 
-    // ── LOGIKA ───────────────────────────────────────────────────
     void do_login(const std::string& name, const std::string& passphrase);
     void do_create_profile(const std::string& name,
                            const std::string& pass1, const std::string& pass2);
@@ -248,45 +224,41 @@ private:
     void send_file_nack(const json& nack);
     void try_complete_incoming_file(const std::string& transfer_id, const std::string& room);
     void retain_outbound_session(FileSenderSession session);
+    void retransmit_server_file_chunks(const std::string& transfer_id,
+                                       const std::shared_ptr<Socket>& dest,
+                                       const std::vector<uint32_t>& indices);
 
-    // ── HANDSHAKE ────────────────────────────────────────────────
     Bytes do_client_handshake(Socket& sock, const std::string& level,
                               bool server_rehandshake = false);
     Bytes do_server_handshake(Socket& sock, const std::string& level);
 
-    // ── BENCHMARKI & STATYSTYKI ──────────────────────────────────
     void run_benchmarks();
     static BenchmarkResult benchmark_level(const std::string& level);
     static CryptoStats get_crypto_stats(const std::string& level);
     static std::vector<SecurityEstimate> build_security_estimates(const std::string& level);
 
-    // ── POKOJE ───────────────────────────────────────────────────
     void join_room(const std::string& room, const std::string& password = "");
     bool create_room(const std::string& room, const std::string& password = "");
     void broadcast_to_room(const std::string& room,
                            const std::string& msg,
                            std::shared_ptr<Socket> exclude = nullptr);
 
-    // PFS po stronie serwera — handshake musi przebiegać w wątku handlera klienta
+    // PFS handshake must run in the client handler thread.
     void perform_pfs_rotation(std::shared_ptr<Socket> sock, const std::string& level);
     void request_pfs_rotation(const std::string& room);
     bool take_pending_pfs_rotation(const std::shared_ptr<Socket>& sock,
                                    std::string& out_level);
 
-    // Thread-safe odczyt/zapis poziomu PQC (UI + wątki sieciowe)
     std::string security_level() const;
     void set_security_level(std::string level);
 
-    // ── LOG HELPERS ──────────────────────────────────────────────
     void log(const std::string& text, ImVec4 color, const std::string& room = "general");
     void hs_step(const std::string& label, double time_ms = -1.0);
     void hs_clear();
 
     static std::string hex_preview(const Bytes& data, size_t n = 8);
 
-    // AAD anty-replay dla wiadomości CHAT: "CHAT|<seq>".
-    // Wiąże szyfrogram z numerem sekwencji — powtórka pakietu ma stary seq,
-    // a podmiana seq w JSON psuje tag GCM.
+    // CHAT AAD anti-replay: binds ciphertext to seq ("CHAT|<seq>").
     static Bytes chat_aad(uint64_t seq);
     static double      ms(std::chrono::high_resolution_clock::time_point a,
                           std::chrono::high_resolution_clock::time_point b);

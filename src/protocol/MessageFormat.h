@@ -22,18 +22,17 @@ enum class MsgType {
 struct SecureMessage {
     MsgType     type;
     std::string sender;
-    Bytes       nonce;      // 12 bajtów IV z AES-GCM
-    Bytes       payload;    // zaszyfrowany tekst/dane
+    Bytes       nonce;
+    Bytes       payload;
     int64_t     timestamp;
 
-    std::string  file_name;       // FILE_START
-    uint64_t     file_size = 0;   // FILE_START
-    uint32_t     chunk_index = 0; // FILE_CHUNK
-    uint32_t     total_chunks = 0;// FILE_START
-    std::string  transfer_id;     // wszystkie typy FILE_*
-    Bytes        file_hash;       // FILE_END (SHA-3-256)
+    std::string  file_name;
+    uint64_t     file_size = 0;
+    uint32_t     chunk_index = 0;
+    uint32_t     total_chunks = 0;
+    std::string  transfer_id;
+    Bytes        file_hash;
 
-    // Konwersja na JSON i z powrotem
     Bytes serialize() const;
     static SecureMessage deserialize(const Bytes& data);
 };

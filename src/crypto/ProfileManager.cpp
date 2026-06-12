@@ -33,7 +33,7 @@ static void acquire_session_lock(const fs::path& profile_dir) {
         pid_t other = 0;
         f >> other;
         if (other == ::getpid())
-            return; // ta sama instancja (np. create -> unlock w teście)
+            return;
         if (pid_alive(other))
             throw std::runtime_error(
                 "Profil jest juz zalogowany w innej instancji Quill (PID " +
@@ -58,7 +58,6 @@ static void release_session_lock(const fs::path& profile_dir) {
         fs::remove(lock);
 }
 
-// Nazwa profilu jest nazwą katalogu — whitelist zamiast escapowania
 static void validate_name(const std::string& name) {
     if (name.empty() || name.size() > MAX_NAME_LEN)
         throw std::runtime_error("Profil: nazwa musi miec 1-32 znaki");
@@ -73,7 +72,6 @@ static void validate_passphrase(const std::string& passphrase) {
         throw std::runtime_error(
             "Passphrase musi miec minimum " +
             std::to_string(ProfileManager::MIN_PASSPHRASE_LEN) + " znakow");
-    // Odrzucamy np. "aaaaaaaa" — zerowa entropia mimo długości
     bool all_same = true;
     for (size_t i = 1; i < passphrase.size(); ++i) {
         if (passphrase[i] != passphrase[0]) { all_same = false; break; }
@@ -131,9 +129,7 @@ std::vector<ProfileInfo> ProfileManager::list() {
         if (!fs::exists(meta_path(entry.path()))) continue;
         try {
             out.push_back(read_meta(entry.path()));
-        } catch (const std::exception&) {
-            // Uszkodzony profile.json — pomijamy na liście, nie wywracamy UI
-        }
+        } catch (const std::exception&) {}
     }
     return out;
 }
@@ -150,9 +146,6 @@ ProfileInfo ProfileManager::create(const std::string& name, const std::string& p
     ::chmod(profiles_root().c_str(), 0700);
     ::chmod(dir.c_str(), 0700);
 
-    // Generacja tożsamości BALANCED od razu:
-    //  1. logowanie ma co weryfikować passphrase'em,
-    //  2. fingerprint jest znany od chwili utworzenia profilu
     IdentityManager::activate(dir / "identity", passphrase);
     try {
         auto kp = IdentityManager::load_or_generate("BALANCED");
@@ -169,7 +162,7 @@ ProfileInfo ProfileManager::create(const std::string& name, const std::string& p
         return info;
     } catch (...) {
         IdentityManager::deactivate();
-        fs::remove_all(dir); // nie zostawiamy profilu w połowie utworzonego
+        fs::remove_all(dir);
         throw;
     }
 }
@@ -182,8 +175,6 @@ ProfileInfo ProfileManager::unlock(const std::string& name, const std::string& p
 
     IdentityManager::activate(dir / "identity", passphrase);
     try {
-        // Weryfikacja passphrase'a: odszyfrowanie (GCM tag) + self-test klucza.
-        // Przy okazji odświeżamy fingerprint w metadanych, gdyby ich brakowało.
         auto kp = IdentityManager::load_or_generate("BALANCED");
         std::string fp = IdentityManager::fingerprint(kp.public_key);
         if (info.fingerprint != fp) {
@@ -195,7 +186,7 @@ ProfileInfo ProfileManager::unlock(const std::string& name, const std::string& p
         RoomStore::activate(dir);
         return info;
     } catch (...) {
-        IdentityManager::deactivate(); // nieudane logowanie nie zostawia stanu
+        IdentityManager::deactivate();
         throw;
     }
 }

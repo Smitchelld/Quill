@@ -7,7 +7,6 @@
 #include "src/frontend/Theme.h"
 
 int main() {
-    // 1. Inicjalizacja GLFW
     if (!glfwInit()) return 1;
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -18,22 +17,16 @@ int main() {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
-    // 2. Inicjalizacja ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
-
-    // Zastosowanie Twojego autorskiego motywu
     Theme::Apply();
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
-    // 3. Inicjalizacja naszej głównej klasy aplikacji
-    // To tutaj siedzi cała logika JSON, Benchmarks, Rooms, itd.
     ChatApp app;
 
-    // 4. Główna pętla renderowania
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
@@ -41,7 +34,6 @@ int main() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // WYWOŁANIE GŁÓWNEJ METODY Z ChatAppRender.cpp
         app.render();
 
         ImGui::Render();
@@ -55,7 +47,6 @@ int main() {
         glfwSwapBuffers(window);
     }
 
-    // 5. Sprzątanie
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();

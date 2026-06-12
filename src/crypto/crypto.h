@@ -51,7 +51,6 @@ inline Bytes kyber_decaps(const std::string& level, const Bytes& ct, const Bytes
     return ss;
 }
 
-// ── AES-256-GCM ────────────────────────────────────────────────
 inline Bytes aes_encrypt(const Bytes& key, const std::string& plaintext) {
     Bytes nonce(12);
     RAND_bytes(nonce.data(), static_cast<int>(nonce.size()));

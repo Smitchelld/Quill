@@ -12,9 +12,6 @@
 
 using clk = std::chrono::high_resolution_clock;
 
-// ══════════════════════════════════════════════════════════════════
-//  KONSTRUKTOR / DESTRUKTOR
-// ══════════════════════════════════════════════════════════════════
 
 ChatApp::ChatApp() {
     m_rooms["general"] = {};
@@ -42,12 +39,10 @@ ChatApp::~ChatApp() {
             if (c.sock) c.sock->close_socket();
     }
 
-    // Higiena pamięci przy zamknięciu: cleanse kluczy i passphrase'a
     ProfileManager::logout();
     cleanse_login_buffers();
 }
 
-// ── PROFIL / LOGOWANIE ────────────────────────────────────────────
 
 void ChatApp::cleanse_login_buffers() {
     OPENSSL_cleanse(m_login_pass_buf,     sizeof(m_login_pass_buf));
@@ -221,8 +216,7 @@ void ChatApp::apply_server_security_level(const std::string& level) {
     if (m_mode != AppMode::SERVER) return;
     set_security_level(level);
 
-    // Rotacja musi przebiegac w watku handlera klienta (nie w UI) — inaczej
-    // deadlock na socketcie i zawieszenie serwera.
+        // PFS rotation must run in client handler thread (not UI).
     {
         std::lock_guard lk(m_clients_mtx);
         for (auto& c : m_clients) {
@@ -296,7 +290,6 @@ void ChatApp::send_display_name() {
     client_send(j.dump());
 }
 
-// ── HELPERY ───────────────────────────────────────────────────────
 
 void ChatApp::log(const std::string& text, ImVec4 color, const std::string& room) {
     std::lock_guard lock(m_log_mtx);
@@ -345,7 +338,6 @@ void ChatApp::broadcast_raw_to_room(const std::string& room,
     }
 }
 
-// ── HANDSHAKE (cienkie wrappery — cała kryptografia w CryptoManager) ──
 
 Bytes ChatApp::do_client_handshake(Socket& sock, const std::string& level,
                                    bool server_rehandshake) {
@@ -407,7 +399,6 @@ Bytes ChatApp::do_server_handshake(Socket& sock, const std::string& level) {
     return res.session_key;
 }
 
-// ── POKOJE ────────────────────────────────────────────────────────
 
 bool ChatApp::create_room(const std::string& room, const std::string& password) {
     {
@@ -530,7 +521,7 @@ void ChatApp::broadcast_to_room(const std::string& room, const std::string& msg,
     std::lock_guard lk(m_clients_mtx);
     for (auto& c : m_clients) {
         if (c.room == room && c.sock != exclude) {
-            uint64_t seq = ++c.send_seq;          // monotoniczny per odbiorca
+            uint64_t seq = ++c.send_seq;
             auto enc = AesGcm::encrypt(c.aes_key, msg, chat_aad(seq));
             json bcast;
             bcast["type"]    = "CHAT";
@@ -545,7 +536,6 @@ void ChatApp::broadcast_to_room(const std::string& room, const std::string& msg,
     }
 }
 
-// ── PFS (serwer) ──────────────────────────────────────────────────
 
 void ChatApp::perform_pfs_rotation(std::shared_ptr<Socket> sock,
                                    const std::string& level) {
@@ -601,7 +591,6 @@ bool ChatApp::take_pending_pfs_rotation(const std::shared_ptr<Socket>& sock,
     return false;
 }
 
-// ── KOMUNIKACJA CZATOWA ───────────────────────────────────────────
 
 void ChatApp::send_chat_msg(const std::string& text) {
     if (m_mode == AppMode::CLIENT && m_connected) {
@@ -614,7 +603,6 @@ void ChatApp::send_chat_msg(const std::string& text) {
         m_last_raw_nonce  = hex_preview(enc.nonce, 12);
         m_last_raw_cipher = hex_preview(enc.ciphertext, 32);
 
-        // Funkcja Tamper (symulacja ataku)
         if (m_tamper && enc.ciphertext.size() > 4)
             enc.ciphertext[4] ^= 0xFF;
 
@@ -644,7 +632,6 @@ void ChatApp::send_chat_msg(const std::string& text) {
     }
 }
 
-// ── LOGIKA SERWERA ────────────────────────────────────────────────
 
 void ChatApp::start_server() {
     try {
@@ -677,7 +664,6 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
     std::string room = "general";
 
     try {
-        // Poziom PQC ustala serwer — klient dostaje go przed handshake
         json cfg;
         cfg["type"]  = "SERVER_CONFIG";
         cfg["level"] = security_level();
@@ -696,7 +682,6 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
         }
         log("[+] Klient polaczony (oczekiwanie na nick...).", Theme::green(), room);
 
-        // Lista pokojow (z flaga protected)
         {
             json rl;
             rl["type"] = "ROOM_LIST";
@@ -718,7 +703,6 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
         }
 
         while (m_connected) {
-            // Rotacja PFS inicjowana przez serwer (auto co N wiadomości) — tylko w tym wątku
             std::string pfs_level;
             if (take_pending_pfs_rotation(sock, pfs_level)) {
                 try {
@@ -732,7 +716,6 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
 
             std::optional<Bytes> data_opt;
             try {
-                // Timeout pozwala obsłużyć pending_pfs_rotation bez czekania na klienta
                 data_opt = sock->try_receive_bytes(500);
             } catch (...) {
                 break;
@@ -741,12 +724,11 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
 
             Bytes data = std::move(*data_opt);
 
-            try { // wewnętrzny try-catch zapobiega przerywaniu połączenia przez np. błąd deszyfracji
+            try {
                 auto j = json::parse(data.begin(), data.end());
                 std::string type = j["type"];
 
                 if (type == "REQ_LEVEL" || type == "REQ_PFS") {
-                    // Klient moze prosic o rotacje PFS; poziom zawsze z serwera
                     perform_pfs_rotation(sock, security_level());
                     continue;
                 }
@@ -824,11 +806,10 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                         for (auto& c : m_clients)
                             if (c.sock == sock) { s_key = c.aes_key; last_seq = c.recv_seq; }
                     }
-                    // AAD wiąże seq z szyfrogramem — najpierw deszyfrujemy z AAD
-                    // dla zadeklarowanego seq (podmiana seq psuje tag GCM)
+                                        // Decrypt with chat AAD before replay check (seq tampering breaks GCM tag).
                     std::string plain = AesGcm::decrypt(s_key, j["nonce"].get<Bytes>(),
                                                         j["payload"].get<Bytes>(), chat_aad(seq));
-                    // Anty-replay: seq musi rosnąć (fail-closed)
+                                        // Anti-replay: seq must increase (fail-closed).
                     if (seq <= last_seq)
                         throw std::runtime_error("Replay detected (seq " +
                             std::to_string(seq) + " <= " + std::to_string(last_seq) + ")");
@@ -862,11 +843,11 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                     log("[FILE] Odbiór: " + fname + " (" + std::to_string(total) + " chunków)",
                         Theme::yellow(), room);
 
-                    // Przekaż do innych klientów w pokoju (relay)
                     broadcast_raw_to_room(room, j.dump(), sock);
                 }
 
                 else if (type == "FILE_CHUNK") {
+                    // Decrypt on server so relay can re-encrypt per recipient session key.
                     std::string tid = j["transfer_id"];
                     Bytes s_key;
                     {
@@ -874,14 +855,12 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                         for (auto& c : m_clients) if (c.sock == sock) s_key = c.aes_key;
                     }
 
-                    // 1. Odszyfruj chunk (serwer musi znać plaintext, żeby go przepakować)
                     uint32_t idx  = j["chunk_index"].get<uint32_t>();
                     Bytes nonce   = j["nonce"].get<Bytes>();
                     Bytes payload = j["payload"].get<Bytes>();
                     Bytes plain_chunk = AesGcm::decrypt_bytes(
                         s_key, nonce, payload, FileSender::chunk_aad(tid, idx));
 
-                    // 2. Lokalny odbiór na serwerze
                     uint32_t before = 0, after = 0;
                     {
                         std::lock_guard lk(m_file_receiver_mtx);
@@ -897,15 +876,13 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                     }
                     try_complete_incoming_file(tid, room);
 
-                    // 3. RE-SZYFROWANIE DLA INNYCH KLIENTÓW W POKOJU
                     std::lock_guard lk(m_clients_mtx);
                     for (auto& c : m_clients) {
                         if (c.room == room && c.sock != sock && c.sock) {
-                            // Szyfrujemy chunk nowym, unikalnym kluczem docelowego klienta
                             auto enc = AesGcm::encrypt(
                                 c.aes_key, plain_chunk, FileSender::chunk_aad(tid, idx));
 
-                            json out_j = j; // kopiujemy metadane (type, tid, chunk_index)
+                            json out_j = j;
                             out_j["nonce"]   = enc.nonce;
                             out_j["payload"] = enc.ciphertext;
 
@@ -914,10 +891,9 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                         }
                     }
                 }else if (type == "FILE_END") {
-                    // 1. NAJPIERW wyślij do innych klientów, by błędy zapisu na serwerze nie psuły transferu P2P!
+                    // Relay FILE_END before local save so P2P isn't blocked by server disk errors.
                     broadcast_raw_to_room(room, j.dump(), sock);
 
-                    // 2. Zapis na serwerze (+ selective repeat)
                     std::string tid = j["transfer_id"];
                     FileEndStatus st;
                     json nack;
@@ -963,19 +939,31 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
                     }
                 }
                 else if (type == "FILE_NACK") {
-                    // Klient-odbiorca prosi o retransmisję → przekaż do nadawcy
                     std::string tid = j["transfer_id"];
-                    std::shared_ptr<Socket> origin;
+                    bool server_origin = false;
                     {
-                        std::lock_guard lk(m_file_origin_mtx);
-                        auto it = m_file_origin_sock.find(tid);
-                        if (it != m_file_origin_sock.end()) origin = it->second.lock();
+                        std::lock_guard lk(m_server_file_mtx);
+                        server_origin = m_server_file_origins.count(tid) > 0;
                     }
-                    if (origin && origin != sock) {
-                        std::string s = j.dump();
-                        origin->send_bytes(Bytes(s.begin(), s.end()));
-                        log("[FILE] NACK przekazany do nadawcy (" + tid + ")",
+                    if (server_origin) {
+                        auto missing = j["missing"].get<std::vector<uint32_t>>();
+                        retransmit_server_file_chunks(tid, sock, missing);
+                        log("[FILE] Retransmisja (serwer) " +
+                            std::to_string(missing.size()) + " chunkow do " + name,
                             Theme::yellow(), room);
+                    } else {
+                        std::shared_ptr<Socket> origin;
+                        {
+                            std::lock_guard lk(m_file_origin_mtx);
+                            auto it = m_file_origin_sock.find(tid);
+                            if (it != m_file_origin_sock.end()) origin = it->second.lock();
+                        }
+                        if (origin && origin != sock) {
+                            std::string s = j.dump();
+                            origin->send_bytes(Bytes(s.begin(), s.end()));
+                            log("[FILE] NACK przekazany do nadawcy (" + tid + ")",
+                                Theme::yellow(), room);
+                        }
                     }
                 }
             } catch (const std::exception& e) {
@@ -986,7 +974,6 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
         log(std::string("Client handler fatal error: ") + e.what(), Theme::red(), room);
     } catch (...) {}
 
-    // Cleanup po rozłączeniu (usuń z list clients i rooms)
     {
         std::lock_guard lk(m_rooms_mtx);
         m_rooms[room].erase(name);
@@ -996,7 +983,6 @@ void ChatApp::server_client_handler(std::shared_ptr<Socket> sock, int id) {
     log("[-] " + name + " disconnected.", Theme::yellow(), room);
 }
 
-// ── LOGIKA KLIENTA ────────────────────────────────────────────────
 
 void ChatApp::start_client() {
     m_mode = AppMode::CLIENT;
@@ -1015,7 +1001,7 @@ void ChatApp::start_client() {
 
             Bytes key = do_client_handshake(*m_client, security_level());
             { std::lock_guard lk(m_session_mtx); m_session_key = key; }
-            m_send_seq = 0; m_recv_seq = 0;  // świeży licznik dla nowej sesji
+            m_send_seq = 0; m_recv_seq = 0;
 
             m_connected = true;
             send_display_name();
@@ -1026,7 +1012,7 @@ void ChatApp::start_client() {
                 try {
                     data = m_client->receive_bytes();
                 } catch (...) {
-                    break; // Rozłączenie na poziomie socketu
+                    break;
                 }
 
                 try {
@@ -1110,14 +1096,13 @@ void ChatApp::start_client() {
                         Bytes curr_key;
                         { std::lock_guard lk(m_session_mtx); curr_key = m_session_key; }
 
-                        // Zapis do Packet Inspectora
                         Bytes n = j["nonce"].get<Bytes>();
                         Bytes p = j["payload"].get<Bytes>();
                         m_last_raw_nonce  = hex_preview(n, 12);
                         m_last_raw_cipher = hex_preview(p, 32);
 
                         std::string plain = AesGcm::decrypt(curr_key, n, p, chat_aad(seq));
-                        // Anty-replay (fail-closed)
+                        // Anti-replay: seq must increase (fail-closed).
                         if (seq <= m_recv_seq)
                             throw std::runtime_error("Replay detected (seq " +
                                 std::to_string(seq) + " <= " + std::to_string(m_recv_seq.load()) + ")");
@@ -1204,7 +1189,6 @@ void ChatApp::start_client() {
     }).detach();
 }
 
-// ── BENCHMARKI I SZACUNKI BEZPIECZEŃSTWA (Logika) ─────────────────
 
 void ChatApp::run_benchmarks() {
     if (m_bench_running) return;
@@ -1222,44 +1206,37 @@ void ChatApp::run_benchmarks() {
 
 BenchmarkResult ChatApp::benchmark_level(const std::string& level) {
     BenchmarkResult r; r.level = level;
-    const int ITERS = 100; // Zwiększone do 100 dla dokładnego uśrednienia szumu CPU
+    const int ITERS = 100;
 
     KyberKEM kem(level);
     DilithiumSign sig(level);
 
     double t_kg = 0, t_enc = 0, t_dec = 0, t_sig = 0, t_ver = 0;
 
-    // --- WARM-UP (Zimny start RNG i cache procesora) ---
     for(int i = 0; i < 3; i++) {
         auto kp = kem.generate_keypair();
         auto skp = sig.generate_keypair();
     }
 
     for(int i = 0; i < ITERS; i++) {
-        // --- KEM Keygen ---
         auto t0 = clk::now();
         auto kp = kem.generate_keypair();
         t_kg += ms(t0, clk::now());
 
-        // --- KEM Encapsulation ---
         auto t1 = clk::now();
         auto [ct, ss] = kem.encapsulate(kp.public_key);
         t_enc += ms(t1, clk::now());
 
-        // --- KEM Decapsulation ---
         auto t2 = clk::now();
         kem.decapsulate(ct, kp.secret_key);
         t_dec += ms(t2, clk::now());
 
-        // ML-DSA używa dużej entropii przy keygenie, zmierzymy tylko samo podpisywanie
         auto skp = sig.generate_keypair();
 
-        // --- DSA Sign ---
         auto t4 = clk::now();
         auto sig_data = sig.sign(ct, skp.secret_key);
         t_sig += ms(t4, clk::now());
 
-        // --- DSA Verify ---
         auto t5 = clk::now();
         sig.verify(ct, sig_data, skp.public_key);
         t_ver += ms(t5, clk::now());
@@ -1298,7 +1275,33 @@ void ChatApp::retain_outbound_session(FileSenderSession session) {
         m_outbound_sessions.erase(tid);
         std::lock_guard lk2(m_file_origin_mtx);
         m_file_origin_sock.erase(tid);
+        std::lock_guard lk3(m_server_file_mtx);
+        m_server_file_origins.erase(tid);
     }).detach();
+}
+
+void ChatApp::retransmit_server_file_chunks(const std::string& transfer_id,
+                                            const std::shared_ptr<Socket>& dest,
+                                            const std::vector<uint32_t>& indices)
+{
+    if (indices.empty() || !dest) return;
+
+    Bytes dest_key;
+    {
+        std::lock_guard lk(m_clients_mtx);
+        for (auto& c : m_clients)
+            if (c.sock == dest) { dest_key = c.aes_key; break; }
+    }
+    if (dest_key.empty()) return;
+
+    std::lock_guard lk(m_outbound_mtx);
+    auto it = m_outbound_sessions.find(transfer_id);
+    if (it == m_outbound_sessions.end()) return;
+
+    for (uint32_t idx : indices) {
+        std::string pkt = it->second.build_chunk_json(idx, dest_key).dump();
+        dest->send_bytes(Bytes(pkt.begin(), pkt.end()));
+    }
 }
 
 void ChatApp::send_file_nack(const json& nack) {
@@ -1351,7 +1354,8 @@ void ChatApp::try_complete_incoming_file(const std::string& transfer_id,
 }
 
 void ChatApp::send_file(const std::filesystem::path& file_path) {
-    if (!m_connected || m_mode != AppMode::CLIENT) return;
+    if (!m_connected) return;
+    if (m_mode != AppMode::CLIENT && m_mode != AppMode::SERVER) return;
 
     constexpr uintmax_t kMaxFileBytes = 100u * 1024u * 1024u;
     std::error_code ec;
@@ -1365,13 +1369,31 @@ void ChatApp::send_file(const std::filesystem::path& file_path) {
         return;
     }
 
+    if (m_mode == AppMode::SERVER) {
+        bool has_recipients = false;
+        {
+            std::lock_guard lk(m_clients_mtx);
+            for (auto& c : m_clients)
+                if (c.room == m_current_room && c.sock) { has_recipients = true; break; }
+        }
+        if (!has_recipients) {
+            log("[FILE] Brak klientow w pokoju #" + m_current_room + ".",
+                Theme::red(), m_current_room);
+            return;
+        }
+    }
+
     Bytes key_copy;
-    { std::lock_guard lk(m_session_mtx); key_copy = m_session_key; }
+    if (m_mode == AppMode::CLIENT) {
+        std::lock_guard lk(m_session_mtx);
+        key_copy = m_session_key;
+    }
 
     std::string sender = m_profile_name;
     std::string room   = m_current_room;
+    const bool as_server = (m_mode == AppMode::SERVER);
 
-    std::thread([this, file_path, key_copy, sender, room]() {
+    std::thread([this, file_path, key_copy, sender, room, as_server]() {
         std::string tid;
         try {
             FileSenderSession session =
@@ -1388,26 +1410,74 @@ void ChatApp::send_file(const std::filesystem::path& file_path) {
             log("[FILE] Wysylanie: " + fname + " (" +
                 std::to_string(total) + " chunkow)", Theme::yellow(), room);
 
-            auto send_cb = [this](const std::string& pkt) -> bool {
-                if (!m_connected || !m_client) return false;
-                client_send(pkt);
-                return true;
-            };
+            bool ok = false;
 
-            bool ok = session.send_start(send_cb);
-            for (uint32_t i = 0; ok && i < total; ++i) {
-                ok = session.send_chunk(i, send_cb);
+            if (as_server) {
                 {
-                    std::lock_guard lk(m_file_progress_mtx);
-                    auto it = m_file_progress.find(tid);
-                    if (it != m_file_progress.end())
-                        it->second.received = i + 1;
+                    std::lock_guard lk(m_server_file_mtx);
+                    m_server_file_origins.insert(tid);
                 }
-                if ((i + 1) % 8 == 0)
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+                auto broadcast = [this, &room](const std::string& pkt) -> bool {
+                    if (!m_connected) return false;
+                    broadcast_raw_to_room(room, pkt, nullptr);
+                    return true;
+                };
+
+                ok = session.send_start(broadcast);
+                for (uint32_t i = 0; ok && i < total; ++i) {
+                    std::vector<std::shared_ptr<Socket>> targets;
+                    std::vector<Bytes> keys;
+                    {
+                        std::lock_guard lk(m_clients_mtx);
+                        for (auto& c : m_clients) {
+                            if (c.room == room && c.sock) {
+                                targets.push_back(c.sock);
+                                keys.push_back(c.aes_key);
+                            }
+                        }
+                    }
+                    if (targets.empty()) { ok = false; break; }
+
+                    for (size_t t = 0; t < targets.size(); ++t) {
+                        std::string pkt =
+                            session.build_chunk_json(i, keys[t]).dump();
+                        targets[t]->send_bytes(Bytes(pkt.begin(), pkt.end()));
+                    }
+
+                    {
+                        std::lock_guard lk(m_file_progress_mtx);
+                        auto it = m_file_progress.find(tid);
+                        if (it != m_file_progress.end())
+                            it->second.received = i + 1;
+                    }
+                    if ((i + 1) % 8 == 0)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
+                if (ok)
+                    ok = session.send_end(broadcast);
+            } else {
+                auto send_cb = [this](const std::string& pkt) -> bool {
+                    if (!m_connected || !m_client) return false;
+                    client_send(pkt);
+                    return true;
+                };
+
+                ok = session.send_start(send_cb);
+                for (uint32_t i = 0; ok && i < total; ++i) {
+                    ok = session.send_chunk(i, send_cb);
+                    {
+                        std::lock_guard lk(m_file_progress_mtx);
+                        auto it = m_file_progress.find(tid);
+                        if (it != m_file_progress.end())
+                            it->second.received = i + 1;
+                    }
+                    if ((i + 1) % 8 == 0)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
+                if (ok)
+                    ok = session.send_end(send_cb);
             }
-            if (ok)
-                ok = session.send_end(send_cb);
 
             retain_outbound_session(std::move(session));
 
